@@ -1,0 +1,78 @@
+# DocFlow — Dependency Reference
+# ─────────────────────────────────────────────────────────────────────────────
+# This is a Node.js project. Dependencies are managed with npm, NOT pip.
+# Install everything by running the commands in the SETUP section below.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# PREREQUISITES
+# ─────────────────────────────────────────────────────────────────────────────
+#   Node.js  >= 18.x   https://nodejs.org/
+#   npm      >= 9.x    (bundled with Node.js)
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# SETUP (run in order)
+# ─────────────────────────────────────────────────────────────────────────────
+#   1. Clone / unzip the project
+#   2. cd server && npm install
+#   3. cp server/.env.example server/.env   (then fill in your keys)
+#   4. cd ../client && npm install
+#   5. Start the server:  cd ../server && npm run dev   (port 3001)
+#   6. Start the client:  cd ../client && npm run dev   (port 5173)
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# SERVER  (server/package.json)
+# ─────────────────────────────────────────────────────────────────────────────
+# Runtime dependencies:
+#   @google/generative-ai   ^0.21.0   — Gemini AI for per-page field extraction
+#   @supabase/supabase-js   ^2.39.0   — Supabase client (DB + storage)
+#   cors                    ^2.8.5    — Cross-origin request headers
+#   dotenv                  ^16.3.1   — Load .env into process.env
+#   express                 ^4.18.2   — HTTP server / routing
+#   multer                  ^1.4.5    — Multipart form-data (PDF upload)
+#   pdf-lib                 ^1.17.1   — PDF parsing (AcroForm + content streams)
+#
+# Dev dependencies:
+#   nodemon                 ^3.0.2    — Auto-restart server on file changes
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# CLIENT  (client/package.json)
+# ─────────────────────────────────────────────────────────────────────────────
+# Runtime dependencies:
+#   @emotion/react          ^11.14.0  — Emotion CSS-in-JS (MUI peer dep)
+#   @emotion/styled         ^11.14.1  — Emotion styled components (MUI peer dep)
+#   @mui/material           ^7.3.8    — Material UI (CircularProgress spinner)
+#   fabric                  ^5.5.2    — Fabric.js canvas overlay for IText fields
+#   jspdf                   ^4.2.0    — Client-side PDF generation (canvas burn)
+#   pdfjs-dist              ^5.4.624  — PDF.js — render PDF pages to canvas
+#   react                   ^18.2.0   — React core
+#   react-dom               ^18.2.0   — React DOM renderer
+#
+# Dev dependencies:
+#   @vitejs/plugin-react    ^4.2.1    — Vite React plugin (Babel / Fast Refresh)
+#   vite                    ^5.0.8    — Build tool / dev server
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# ENVIRONMENT VARIABLES  (see server/.env.example)
+# ─────────────────────────────────────────────────────────────────────────────
+#   SUPABASE_URL            — Your Supabase project URL
+#   SUPABASE_ANON_KEY       — Supabase anon/public key
+#   GEMINI_API_KEY          — Google AI Studio API key
+#   PORT                    — Server port (default: 3001)
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# SUPABASE TABLE  (run once in Supabase SQL editor)
+# ─────────────────────────────────────────────────────────────────────────────
+#   CREATE TABLE parsed_documents (
+#     id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+#     filename    text NOT NULL,
+#     fields      jsonb DEFAULT '[]',
+#     checkboxes  jsonb DEFAULT '[]',
+#     created_at  timestamptz DEFAULT now()
+#   );
+#
+#   -- Enable public read (adjust RLS as needed for production)
+#   ALTER TABLE parsed_documents ENABLE ROW LEVEL SECURITY;
+#   CREATE POLICY "allow all" ON parsed_documents FOR ALL USING (true);
+#
+# Supabase Storage: create a bucket named "documents" (public) and upload
+#   incident-report.pdf  to use the "New Incident Report" feature.

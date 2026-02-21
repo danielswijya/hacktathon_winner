@@ -1,0 +1,22 @@
+# Environment — never commit secrets
+server/.env
+.env
+.env.local
+.env.*.local
+
+# Dependencies
+node_modules/
+server/node_modules/
+client/node_modules/
+
+# Build output
+client/dist/
+client/.vite/
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
