@@ -45,22 +45,6 @@ function UploadZone({
             <span className="pdf-toolbar-name">
               {selectedDoc.display_name || selectedDoc.filename}
             </span>
-            {pdfBuffer && (
-              <span className="pdf-sync-badge">⚡ Live sync</span>
-            )}
-            <button
-              className="btn-outline"
-              onClick={() => { onNewUpload(); setTimeout(() => fileRef.current?.click(), 0); }}
-            >
-              Upload New PDF
-            </button>
-            <input
-              ref={fileRef}
-              type="file"
-              accept=".pdf"
-              onChange={handleFileChange}
-              style={{ display: 'none' }}
-            />
           </div>
 
           {pdfBuffer ? (

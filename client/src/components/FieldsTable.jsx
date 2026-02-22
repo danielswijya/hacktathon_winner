@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import CircularProgress from '@mui/material/CircularProgress';
 import Tabs from '@mui/material/Tabs';
 import Tab from '@mui/material/Tab';
@@ -39,17 +39,17 @@ function sortByPosition(arr) {
 }
 
 // ── Analysis Tab ──────────────────────────────────────────────────────────────
-function AnalysisTab({ fields, checkboxes }) {
-  const [status, setStatus] = useState('idle'); // idle | loading | done | error
-  const [result, setResult] = useState(null);
+function AnalysisTab({ fields, checkboxes, cachedResult, onAnalysisComplete }) {
+  const [status, setStatus] = useState(cachedResult ? 'done' : 'idle');
   const [errorMsg, setErrorMsg] = useState('');
+  const result = cachedResult ?? null;
 
   const hasData = fields.length > 0 || checkboxes.length > 0;
 
   const runAnalysis = async () => {
     setStatus('loading');
-    setResult(null);
     setErrorMsg('');
+    onAnalysisComplete?.(null);
     try {
       const res = await fetch('/api/analyze', {
         method: 'POST',
@@ -58,7 +58,7 @@ function AnalysisTab({ fields, checkboxes }) {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Analysis failed');
-      setResult(data);
+      onAnalysisComplete?.(data);
       setStatus('done');
     } catch (err) {
       setErrorMsg(err.message);
@@ -70,7 +70,11 @@ function AnalysisTab({ fields, checkboxes }) {
   if (status === 'idle' || (status === 'error' && !result)) {
     return (
       <div className="analysis-placeholder">
-        <div className="analysis-placeholder-icon">📊</div>
+        <div className="analysis-placeholder-icon analysis-placeholder-icon--chart" aria-hidden>
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M3 3v18h18M7 16v-5M11 16v-3M15 16V9M19 16v-7" stroke="#2563eb" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
+        </div>
         <h3 className="analysis-placeholder-title">Case Duration Estimator</h3>
         <p className="analysis-placeholder-desc">
           AI will classify this incident into Massachusetts court categories and
@@ -86,7 +90,7 @@ function AnalysisTab({ fields, checkboxes }) {
           disabled={!hasData}
           title={hasData ? 'Run AI analysis' : 'Fill in the form fields first'}
         >
-          {status === 'error' ? '↺ Retry Analysis' : '✦ Analyze This Incident'}
+          {status === 'error' ? 'Retry Analysis' : 'Analyze This Incident'}
         </button>
         {!hasData && (
           <p className="analysis-no-data">Fill in at least one field to enable analysis.</p>
@@ -108,53 +112,165 @@ function AnalysisTab({ fields, checkboxes }) {
     );
   }
 
-  // ── Result ──
+  // ── Form completion stats (from JSON form fields + checkboxes) ──
+  const totalFields = fields.length + checkboxes.length;
+  const filledFields = fields.filter((f) => f.value != null && String(f.value).trim() !== '').length;
+  const filledCheckboxes = checkboxes.filter((cb) => cb.value === 'Yes' || cb.value === true).length;
+  const filled = filledFields + filledCheckboxes;
+  const pctComplete = totalFields ? Math.round((filled / totalFields) * 100) : 0;
+  const missingFieldLabels = fields
+    .filter((f) => !f.value || String(f.value).trim() === '')
+    .map((f) => f.label || f.key || 'Field');
+  const missingCheckboxLabels = checkboxes
+    .filter((cb) => cb.value !== 'Yes' && cb.value !== true)
+    .map((cb) => cb.label || cb.key || 'Option');
+  const missingLabels = [...missingFieldLabels, ...missingCheckboxLabels];
+  const maxShow = 5;
+
+  // ── Result: two cards like mockup — left: Case Type, right: Est. Duration ──
   const days = result?.predicted_days;
   const weeksApprox = days != null ? Math.round(days / 7) : null;
+  const monthsApprox = days != null ? (days / 30.44).toFixed(1) : null;
+
+  const ScaleIcon = () => (
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className="analysis-hero-icon-svg">
+      <path d="M12 2v6m0 4v10M5 8l7 4 7-4M5 8v4l7 4 7-4V8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+    </svg>
+  );
+  const ClockIcon = () => (
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className="analysis-hero-icon-svg">
+      <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="2"/>
+      <path d="M12 6v6l4 2" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+    </svg>
+  );
+  const BuildingIcon = () => (
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className="analysis-hero-icon-svg">
+      <path d="M4 21h16M4 10h16M9 21v-5h6v5M4 10V4h16v6M9 7h.01M15 7h.01" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+    </svg>
+  );
+  const PinIcon = () => (
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className="analysis-hero-icon-svg">
+      <path d="M12 2c-3.3 0-6 2.7-6 6 0 4.4 6 10 6 10s6-5.6 6-10c0-3.3-2.7-6-6-6z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+      <circle cx="12" cy="8" r="2" stroke="currentColor" strokeWidth="2"/>
+    </svg>
+  );
+  // Donut: circumference = 2 * π * 36, stroke-dasharray = [arc, gap], arc = (pct/100)*circ
+  const donutR = 36;
+  const donutC = 2 * Math.PI * donutR;
+  const donutArc = (pctComplete / 100) * donutC;
 
   return (
     <div className="analysis-result">
-      {/* Headline metric */}
-      <div className="analysis-metric-card">
-        <span className="analysis-metric-label">Estimated Case Duration</span>
-        {days != null ? (
-          <>
-            <span className="analysis-metric-value">{Math.round(days)}</span>
-            <span className="analysis-metric-unit">
-              days{weeksApprox ? ` (~${weeksApprox} wks)` : ''}
+      {/* Top row: Form completed (donut + %) | Missing fields (list with red bullets) */}
+      <div className="analysis-completion-row">
+        <div className="analysis-completion-card analysis-completion-card--donut">
+          <div className="analysis-completion-donut-wrap">
+            <svg className="analysis-completion-donut" viewBox="0 0 88 88" aria-hidden>
+              <circle
+                className="analysis-completion-donut-bg"
+                cx="44"
+                cy="44"
+                r={donutR}
+                fill="none"
+                strokeWidth="8"
+              />
+              <circle
+                className="analysis-completion-donut-fill"
+                cx="44"
+                cy="44"
+                r={donutR}
+                fill="none"
+                strokeWidth="8"
+                strokeDasharray={`${donutArc} ${donutC}`}
+                strokeLinecap="round"
+                transform="rotate(-90 44 44)"
+              />
+            </svg>
+            <span className="analysis-completion-donut-pct">{pctComplete}%</span>
+          </div>
+          <h3 className="analysis-completion-title">Form Completed</h3>
+          <p className="analysis-completion-detail">{filled} of {totalFields} fields filled</p>
+        </div>
+        <div className="analysis-completion-card analysis-completion-card--missing">
+          <h3 className="analysis-completion-title">Missing Fields</h3>
+          <p className="analysis-completion-sub">
+            {missingLabels.length === 0
+              ? 'All fields filled'
+              : `${missingLabels.length} field${missingLabels.length !== 1 ? 's' : ''} require attention`}
+          </p>
+          {missingLabels.length > 0 ? (
+            <ul className="analysis-missing-list">
+              {missingLabels.slice(0, maxShow).map((label, i) => (
+                <li key={i}>{label}</li>
+              ))}
+              {missingLabels.length > maxShow && (
+                <li className="analysis-missing-more">+{missingLabels.length - maxShow} more</li>
+              )}
+            </ul>
+          ) : null}
+        </div>
+      </div>
+
+      {/* Row 2: Case Type (left), Est. Duration (right) */}
+      <div className="analysis-hero-cards">
+        <div className="analysis-hero-card">
+          <div className="analysis-hero-card-header">
+            <span className="analysis-hero-icon analysis-hero-icon--scale">
+              <ScaleIcon />
             </span>
-          </>
-        ) : (
-          <span className="analysis-metric-na">Model unavailable</span>
-        )}
-        <span className="analysis-metric-note">
-          Based on similar historical MassCourts cases
-        </span>
+            <span className="analysis-hero-card-label">Case type</span>
+          </div>
+          <div className="analysis-hero-card-value analysis-hero-card-value--text">
+            {result?.case_type || '—'}
+          </div>
+        </div>
+        <div className="analysis-hero-card">
+          <div className="analysis-hero-card-header">
+            <span className="analysis-hero-icon analysis-hero-icon--clock">
+              <ClockIcon />
+            </span>
+            <span className="analysis-hero-card-label">Est. duration</span>
+          </div>
+          {days != null ? (
+            <>
+              <div className="analysis-hero-card-value">
+                {weeksApprox} weeks
+              </div>
+              <div className="analysis-hero-card-detail">
+                ~{monthsApprox} months total
+              </div>
+            </>
+          ) : (
+            <div className="analysis-hero-card-value analysis-hero-card-na">Model unavailable</div>
+          )}
+        </div>
       </div>
 
-      {/* Classification cards */}
-      <div className="analysis-cards">
-        <div className="analysis-card">
-          <span className="analysis-card-label">Court Department</span>
-          <span className="analysis-card-value">{result.court_department}</span>
+      {/* Second row: Court Department + Court Location (other regression inputs) */}
+      <div className="analysis-hero-cards">
+        <div className="analysis-hero-card">
+          <div className="analysis-hero-card-header">
+            <span className="analysis-hero-icon analysis-hero-icon--scale">
+              <BuildingIcon />
+            </span>
+            <span className="analysis-hero-card-label">Court department</span>
+          </div>
+          <div className="analysis-hero-card-value analysis-hero-card-value--text">
+            {result?.court_department || '—'}
+          </div>
         </div>
-        <div className="analysis-card">
-          <span className="analysis-card-label">Case Type</span>
-          <span className="analysis-card-value">{result.case_type}</span>
-        </div>
-        <div className="analysis-card">
-          <span className="analysis-card-label">Likely Venue</span>
-          <span className="analysis-card-value">{result.court_location}</span>
+        <div className="analysis-hero-card">
+          <div className="analysis-hero-card-header">
+            <span className="analysis-hero-icon analysis-hero-icon--clock">
+              <PinIcon />
+            </span>
+            <span className="analysis-hero-card-label">Court location</span>
+          </div>
+          <div className="analysis-hero-card-value analysis-hero-card-value--text">
+            {result?.court_location || '—'}
+          </div>
         </div>
       </div>
-
-      {/* Gemini reasoning */}
-      {result.reasoning && (
-        <div className="analysis-reasoning">
-          <span className="analysis-reasoning-label">AI Reasoning</span>
-          <p className="analysis-reasoning-text">{result.reasoning}</p>
-        </div>
-      )}
 
       {/* Disclaimer + re-run */}
       <div className="analysis-footer">
@@ -162,7 +278,7 @@ function AnalysisTab({ fields, checkboxes }) {
           This is a historical estimate for informational purposes only — not legal advice.
         </p>
         <button className="btn-analyze btn-analyze--secondary" onClick={runAnalysis}>
-          ↺ Re-analyze
+          Re-analyze
         </button>
       </div>
     </div>
@@ -185,6 +301,11 @@ function FieldsTable({
   style,
 }) {
   const [activeTab, setActiveTab] = useState(0);
+  const [analysisCache, setAnalysisCache] = useState(null);
+
+  useEffect(() => {
+    setAnalysisCache(null);
+  }, [selectedDoc?.id]);
 
   if (!selectedDoc) {
     return (
@@ -390,7 +511,12 @@ function FieldsTable({
 
       {/* ── Tab 1: Analysis ── */}
       {activeTab === 1 && (
-        <AnalysisTab fields={fields} checkboxes={checkboxes} />
+        <AnalysisTab
+          fields={fields}
+          checkboxes={checkboxes}
+          cachedResult={analysisCache}
+          onAnalysisComplete={setAnalysisCache}
+        />
       )}
     </aside>
   );

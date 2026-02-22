@@ -15,10 +15,6 @@ Direct test (Windows):
 
 import sys
 import json
-import os
-import numpy as np
-import pandas as pd
-import joblib
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -33,6 +29,7 @@ ARTIFACTS = {
 
 
 def load_artifacts():
+    import joblib
     loaded = {}
     for key, fname in ARTIFACTS.items():
         path = SCRIPT_DIR / fname
@@ -54,6 +51,7 @@ def load_artifacts():
 
 
 def prepare_features(court_department, case_type, court_location, loaded):
+    import pandas as pd
     le_dept = loaded["le_dept"]
     le_type = loaded["le_type"]
     le_loc  = loaded["le_loc"]
@@ -94,33 +92,55 @@ def prepare_features(court_department, case_type, court_location, loaded):
     return X
 
 
+def fallback_days(court_department, case_type, court_location):
+    """Return a rough default when model artifacts are missing."""
+    # Simple heuristic by court type (days)
+    defaults = {
+        "District Court": 60,
+        "BMC": 45,
+        "Housing Court": 75,
+        "Probate and Family Court": 120,
+        "The Superior Court": 180,
+        "Land Court Department": 150,
+    }
+    return float(defaults.get(court_department, 90))
+
+
 def main():
+    raw = sys.stdin.read().strip()
+    inp = {}
+    if raw:
+        try:
+            inp = json.loads(raw)
+        except json.JSONDecodeError:
+            pass
+    court_department = inp.get("court_department", "District Court")
+    case_type = inp.get("case_type", "Civil")
+    court_location = inp.get("court_location", "Suffolk County Civil")
+
     try:
-        raw = sys.stdin.read().strip()
-        if not raw:
-            raise ValueError("No input received on stdin")
-        inp = json.loads(raw)
-
-        court_department = inp["court_department"]
-        case_type        = inp["case_type"]
-        court_location   = inp["court_location"]
-
         loaded = load_artifacts()
         X = prepare_features(court_department, case_type, court_location, loaded)
-
         scaler = loaded["scaler"]
-        model  = loaded["model"]
-
+        model = loaded["model"]
         X_scaled = scaler.transform(X) if scaler is not None else X
         pred = float(model.predict(X_scaled)[0])
-
         print(json.dumps({"predicted_days": round(pred, 1)}))
-        sys.exit(0)
-
     except Exception as exc:
-        print(f"predict.py error: {exc}", file=sys.stderr)
-        sys.exit(1)
+        print(f"predict.py: {exc}", file=sys.stderr)
+        days = fallback_days(court_department, case_type, court_location)
+        print(json.dumps({"predicted_days": round(days, 1), "fallback": True}))
+    sys.stdout.flush()
+    sys.stderr.flush()
+    sys.exit(0)
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as exc:
+        print(f"predict.py: {exc}", file=sys.stderr)
+        print(json.dumps({"predicted_days": 90.0, "fallback": True}))
+        sys.stdout.flush()
+        sys.stderr.flush()
+        sys.exit(0)

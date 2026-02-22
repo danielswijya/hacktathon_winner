@@ -9,6 +9,7 @@ export default defineConfig({
       '/api': {
         target: 'http://localhost:3001',
         changeOrigin: true,
+        timeout: 60000, // 60s so Gemini + Python regression don't cause socket hang up
       },
     },
   },

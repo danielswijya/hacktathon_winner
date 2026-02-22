@@ -631,6 +631,17 @@ body {
   line-height: 1;
 }
 
+.analysis-placeholder-icon--chart {
+  width: 48px;
+  height: 48px;
+  margin: 0 auto;
+  background: linear-gradient(135deg, #dbeafe 0%, #e0e7ff 100%);
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
 .analysis-placeholder-title {
   font-size: 15px;
   font-weight: 600;
@@ -728,125 +739,389 @@ body {
 .analysis-result {
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  padding: 16px;
+  gap: 10px;
+  padding: 12px 14px 24px;
   overflow-y: auto;
   flex: 1;
+  font-size: 13px;
+  line-height: 1.45;
+  color: #374151;
 }
 
-.analysis-metric-card {
+/* Top row: Form completed (donut) + Missing fields */
+.analysis-completion-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.analysis-completion-card {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 14px 16px;
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 20px 16px 16px;
-  background: linear-gradient(135deg, #eff6ff 0%, #f5f3ff 100%);
-  border: 1px solid #dbeafe;
-  border-radius: 12px;
   text-align: center;
-  gap: 2px;
+  min-height: 0;
 }
 
-.analysis-metric-label {
-  font-size: 11px;
+.analysis-completion-card--missing {
+  align-items: stretch;
+  text-align: left;
+}
+
+.analysis-completion-donut-wrap {
+  position: relative;
+  width: 88px;
+  height: 88px;
+  margin-bottom: 8px;
+}
+
+.analysis-completion-donut {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.analysis-completion-donut-bg {
+  stroke: #e5e7eb;
+}
+
+.analysis-completion-donut-fill {
+  stroke: #2563eb;
+  transition: stroke-dasharray 0.3s ease;
+}
+
+.analysis-completion-donut-pct {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1;
+  color: #111827;
+  pointer-events: none;
+}
+
+.analysis-completion-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: #111827;
+  margin: 0 0 4px;
+}
+
+.analysis-completion-detail,
+.analysis-completion-sub {
+  font-size: 12px;
+  color: #6b7280;
+  margin: 0;
+  line-height: 1.4;
+}
+
+.analysis-completion-sub {
+  margin-bottom: 8px;
+}
+
+/* Missing fields list: red bullets */
+.analysis-completion-card--missing .analysis-missing-list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12px;
+  color: #374151;
+  line-height: 1.6;
+  list-style: none;
+}
+
+.analysis-completion-card--missing .analysis-missing-list li {
+  position: relative;
+  margin-bottom: 4px;
+  padding-left: 4px;
+}
+
+.analysis-completion-card--missing .analysis-missing-list li::before {
+  content: '';
+  position: absolute;
+  left: -14px;
+  top: 0.5em;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #dc2626;
+}
+
+.analysis-completion-card--missing .analysis-missing-list .analysis-missing-more::before {
+  background: #9ca3af;
+}
+
+/* Two hero cards: Case Type (left), Est. Duration (right) */
+.analysis-hero-cards {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.analysis-hero-card {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 0;
+}
+
+.analysis-hero-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.analysis-hero-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.analysis-hero-icon--scale,
+.analysis-hero-icon--clock {
+  background: #dbeafe;
+  color: #2563eb;
+}
+
+.analysis-hero-icon-svg {
+  width: 20px;
+  height: 20px;
+}
+
+.analysis-hero-card-label {
+  font-size: 10px;
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.07em;
+  letter-spacing: 0.05em;
   color: #6b7280;
 }
 
-.analysis-metric-value {
-  font-size: 52px;
+.analysis-hero-card-value {
+  font-size: 18px;
   font-weight: 700;
-  color: #1d4ed8;
-  line-height: 1.1;
-  letter-spacing: -2px;
+  color: #111827;
+  line-height: 1.25;
 }
 
-.analysis-metric-unit {
-  font-size: 14px;
+.analysis-hero-card-value--text {
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.25;
+  word-break: break-word;
+}
+
+.analysis-hero-card-detail {
+  font-size: 11px;
+  color: #6b7280;
+}
+
+.analysis-hero-card-na {
+  font-size: 13px;
   font-weight: 500;
-  color: #3b82f6;
-}
-
-.analysis-metric-na {
-  font-size: 16px;
   color: #9ca3af;
   font-style: italic;
 }
 
-.analysis-metric-note {
-  font-size: 11px;
+.analysis-missing-more {
   color: #9ca3af;
-  margin-top: 4px;
+  font-style: italic;
 }
 
-.analysis-cards {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.analysis-card {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 10px 14px;
-  background: #f9fafb;
+/* Law Offices */
+.analysis-laws {
+  background: #fff;
   border: 1px solid #e5e7eb;
-  border-radius: 8px;
+  border-radius: 10px;
+  overflow: hidden;
 }
 
-.analysis-card-label {
+.analysis-laws-title {
   font-size: 10px;
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.07em;
-  color: #9ca3af;
+  letter-spacing: 0.05em;
+  color: #6b7280;
+  margin: 0;
+  padding: 10px 12px;
+  border-bottom: 1px solid #e5e7eb;
 }
 
-.analysis-card-value {
+/* Law Offices card (Boston, case type) */
+.analysis-offices-card {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+  padding-bottom: 20px;
+  margin-bottom: 8px;
+}
+
+.analysis-offices-card-header {
+  padding: 14px 16px;
+  background: linear-gradient(180deg, #fafbfc 0%, #fff 100%);
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.analysis-offices-card-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #4b5563;
+  margin: 0 0 4px;
+}
+
+.analysis-offices-card-sub {
   font-size: 13px;
+  font-weight: 500;
+  color: #111827;
+  margin: 0;
+}
+
+.analysis-offices-list {
+  margin: 0;
+  padding: 8px 0;
+  list-style: none;
+}
+
+.analysis-offices-list-item {
+  padding: 12px 16px;
+  border-bottom: 1px solid #f3f4f6;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.analysis-offices-list-item:last-child {
+  border-bottom: none;
+}
+
+.analysis-offices-name {
+  font-size: 14px;
   font-weight: 600;
   color: #111827;
 }
 
-.analysis-reasoning {
-  padding: 12px 14px;
-  background: #fffbeb;
-  border: 1px solid #fde68a;
-  border-radius: 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+.analysis-offices-addr {
+  font-size: 12px;
+  color: #6b7280;
+  font-weight: 400;
 }
 
-.analysis-reasoning-label {
+.analysis-offices-sub {
+  margin: 0;
+  padding: 6px 12px 10px;
+  font-size: 11px;
+  color: #6b7280;
+  border-bottom: 1px solid #f3f4f6;
+}
+
+.analysis-offices-item .analysis-laws-name {
+  display: block;
+}
+
+.analysis-offices-address {
+  margin: 2px 0 0;
+  font-size: 11px;
+  font-weight: 400;
+  color: #6b7280;
+  line-height: 1.4;
+}
+
+.analysis-laws-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.analysis-laws-item {
+  padding: 10px 12px;
+  border-bottom: 1px solid #f3f4f6;
+  font-size: 13px;
+}
+
+.analysis-laws-item:last-child {
+  border-bottom: none;
+}
+
+.analysis-laws-item-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.analysis-laws-name {
+  font-weight: 600;
+  color: #111827;
+  flex: 1;
+  min-width: 0;
+}
+
+.analysis-laws-tag {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  border-radius: 4px;
   font-size: 10px;
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.07em;
-  color: #92400e;
+  letter-spacing: 0.03em;
 }
 
-.analysis-reasoning-text {
+.analysis-laws-tag--federal {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.analysis-laws-tag--state {
+  background: #ffedd5;
+  color: #c2410c;
+}
+
+.analysis-laws-tag--local {
+  background: #f3f4f6;
+  color: #4b5563;
+}
+
+.analysis-laws-why {
+  margin: 6px 0 0;
   font-size: 12px;
-  color: #78350f;
-  line-height: 1.6;
-  font-style: italic;
+  font-weight: 400;
+  color: #6b7280;
+  line-height: 1.5;
 }
 
 .analysis-footer {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
   align-items: flex-start;
-  padding-top: 4px;
+  padding-top: 2px;
 }
 
 .analysis-disclaimer {
   font-size: 11px;
   color: #9ca3af;
-  line-height: 1.5;
+  line-height: 1.45;
 }
 
 .table-section {
@@ -1164,12 +1439,6 @@ tr:hover td {
 .doc-name-input:focus {
   border-color: #3b82f6;
   background: #fff;
-}
-
-/* DCAMM badge in sidebar */
-.doc-badge--report {
-  background: #ede9fe;
-  color: #7c3aed;
 }
 
 /* ============================================
