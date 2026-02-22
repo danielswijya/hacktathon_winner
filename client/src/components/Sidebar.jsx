@@ -90,9 +90,6 @@ function Sidebar({ documents, selectedDoc, onSelect, onNewIncidentReport, onDele
                         {cbCount} checkboxes
                       </span>
                     )}
-                    {isReport && (
-                      <span className="doc-badge doc-badge--report">DCAMM</span>
-                    )}
                   </div>
                 </div>
                 <button

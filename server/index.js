@@ -466,17 +466,26 @@ app.get('/api/documents', async (req, res) => {
 });
 
 // PATCH /api/documents/:id — save updated field values (snapshot)
+// Requires parsed_documents.fields and .checkboxes to be JSONB (see database_ensure_jsonb_columns.sql)
 app.patch('/api/documents/:id', async (req, res) => {
   try {
-    const { fields, checkboxes } = req.body;
+    const fields = Array.isArray(req.body.fields) ? req.body.fields : [];
+    const checkboxes = Array.isArray(req.body.checkboxes) ? req.body.checkboxes : [];
+    const docId = req.params.id;
+
+    console.log(`💾 Saving document ${docId}: ${fields.length} fields, ${checkboxes.length} checkboxes`);
+
     const { data, error } = await supabase
       .from('parsed_documents')
       .update({ fields, checkboxes })
-      .eq('id', req.params.id)
+      .eq('id', docId)
       .select()
       .single();
 
-    if (error) throw error;
+    if (error) {
+      console.error('Supabase update error:', error.message);
+      throw error;
+    }
 
     res.json({ ...data, display_name: getDisplayName(data.filename) });
   } catch (err) {
@@ -502,6 +511,34 @@ app.get('/api/documents/:id', async (req, res) => {
     });
   } catch (err) {
     console.error('Fetch document error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/documents/:id/analyze — load document JSON from Supabase, run Gemini + regression
+// Uses stored fields/checkboxes in parsed_documents; Gemini picks city, court type, case type from allowed lists; regression outputs estimated days.
+app.post('/api/documents/:id/analyze', async (req, res) => {
+  try {
+    const docId = req.params.id;
+    const { data: doc, error: docError } = await supabase
+      .from('parsed_documents')
+      .select('id, fields, checkboxes, filename')
+      .eq('id', docId)
+      .single();
+
+    if (docError || !doc) {
+      return res.status(404).json({ error: 'Document not found' });
+    }
+
+    const fields = doc.fields || [];
+    const checkboxes = doc.checkboxes || [];
+    const incidentSummary = buildIncidentSummaryFromDoc(fields, checkboxes);
+
+    console.log(`📋 Analyzing document ${docId} from Supabase (parsed_documents)`);
+    const result = await runAnalysisPipeline(incidentSummary);
+    res.json(result);
+  } catch (err) {
+    console.error('❌ Document analyze error:', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -572,18 +609,24 @@ app.delete('/api/documents/:id', async (req, res) => {
 });
 
 // ── Gemini prompt for court classification ───────────────────────────────────
+// Base classification on Location (→ court_location) and Narrative (→ case_type, court_department). Only allowed list values.
 const COURT_CLASSIFICATION_PROMPT = `You are a legal case classifier for Massachusetts courts.
-An incident occurred at a Massachusetts government building managed by DCAMM (Department of Capital Asset Management and Maintenance).
-Based on the incident details below, determine which Massachusetts court would most likely handle a resulting legal claim.
+An incident occurred at a Massachusetts government building managed by DCAMM. You will receive incident details from a form.
 
-INCIDENT DETAILS:
+IMPORTANT — Use only these two inputs to decide the three outputs:
+1. **Location** (form field): Use this to pick court_location. Map the city/area to the matching Massachusetts court in the court_location list (e.g. Cambridge → "Cambridge District Court", Boston → a Boston-area court from the list).
+2. **Narrative** (form field): Use this to pick case_type and court_department. The narrative describes what happened (e.g. theft, injury, vandalism). Map that to one case_type and the court type (court_department) that would handle it.
+
+You MUST output exactly one value from EACH of the three lists below. Do not invent values — only use strings that appear in the lists.
+
+INCIDENT DETAILS (from form — pay special attention to "Location:" and "Narrative:"):
 {INCIDENT_SUMMARY}
 
 Return ONLY this JSON object — no markdown, no explanation outside the JSON:
 {
-  "court_department": "<one of the EXACT values listed below>",
-  "case_type": "<one of the EXACT values listed below>",
-  "court_location": "<one of the EXACT values listed below>",
+  "court_department": "<exactly one value from the court_department list below>",
+  "case_type": "<exactly one value from the case_type list below>",
+  "court_location": "<exactly one value from the court_location list below>",
   "reasoning": "<1-2 sentence explanation of your classification>"
 }
 
@@ -632,20 +675,21 @@ Classification rules:
 // ── Helper: run Python prediction script ─────────────────────────────────────
 function runPythonPrediction(court_department, case_type, court_location) {
   const scriptPath = path.join(__dirname, 'analysis', 'predict.py');
+  const inputJson = JSON.stringify({ court_department, case_type, court_location });
 
   return new Promise((resolve, reject) => {
-    // Try 'python' first; fall back to 'python3' if it fails
     const trySpawn = (cmd) => {
-      const py = spawn(cmd, [scriptPath]);
+      // -u = unbuffered stdout/stderr so Node gets output immediately
+      const py = spawn(cmd, ['-u', scriptPath], { stdio: ['pipe', 'pipe', 'pipe'] });
       let out = '', err = '';
 
       py.stdout.on('data', (d) => { out += d.toString(); });
       py.stderr.on('data', (d) => { err += d.toString(); });
 
       py.on('error', (spawnErr) => {
-        if (cmd === 'python') {
-          console.warn('⚠️  "python" not found, retrying with "python3"...');
-          trySpawn('python3').then(resolve).catch(reject);
+        if (cmd === 'python3') {
+          console.warn('⚠️  "python3" not found, retrying with "python"...');
+          trySpawn('python');
         } else {
           reject(new Error(`Could not spawn Python: ${spawnErr.message}`));
         }
@@ -655,92 +699,112 @@ function runPythonPrediction(court_department, case_type, court_location) {
         if (code !== 0) {
           return reject(new Error(err.trim() || `Python exited with code ${code}`));
         }
+        const trimmed = out.trim();
+        if (!trimmed) {
+          return reject(new Error('predict.py produced no output. ' + (err.trim() || '')));
+        }
         try {
-          resolve(JSON.parse(out.trim()));
-        } catch {
-          reject(new Error(`Bad JSON from predict.py: ${out.slice(0, 200)}`));
+          resolve(JSON.parse(trimmed));
+        } catch (e) {
+          reject(new Error(`Bad JSON from predict.py: ${trimmed.slice(0, 200)}`));
         }
       });
 
-      py.stdin.write(JSON.stringify({ court_department, case_type, court_location }));
+      py.stdin.write(inputJson, (e) => {
+        if (e) reject(e);
+      });
       py.stdin.end();
     };
 
-    trySpawn('python');
+    trySpawn('python3');
   });
+}
+
+// ── Helper: build incident summary from parsed_documents JSON (fields + checkboxes) ──
+function buildIncidentSummaryFromDoc(fields = [], checkboxes = []) {
+  const summaryLines = [];
+  for (const f of fields) {
+    if (f.value && String(f.value).trim()) {
+      summaryLines.push(`${f.label}: ${f.value}`);
+    }
+  }
+  for (const cb of checkboxes) {
+    if (cb.value === 'Yes' || cb.value === true) {
+      summaryLines.push(`${cb.label}: Yes`);
+    }
+  }
+  return summaryLines.length > 0
+    ? summaryLines.join('\n')
+    : 'No incident details provided (blank form).';
+}
+
+// ── Helper: run Gemini classification + Python regression on an incident summary ──
+async function runAnalysisPipeline(incidentSummary) {
+  const prompt = COURT_CLASSIFICATION_PROMPT.replace('{INCIDENT_SUMMARY}', incidentSummary);
+  console.log('🔍 Running Gemini court classification...');
+  const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+  const result = await model.generateContent([{ text: prompt }]);
+  let geminiText = result.response.text().trim()
+    .replace(/```json\s*/gi, '')
+    .replace(/```\s*/g, '')
+    .trim();
+
+  let classification;
+  try {
+    classification = JSON.parse(geminiText);
+  } catch {
+    const match = geminiText.match(/\{[\s\S]*\}/);
+    if (match) {
+      classification = JSON.parse(match[0]);
+    } else {
+      throw new Error('Gemini did not return valid JSON: ' + geminiText.slice(0, 300));
+    }
+  }
+
+  console.log('✅ Gemini classification:', {
+    court_department: classification.court_department,
+    case_type: classification.case_type,
+    court_location: classification.court_location,
+  });
+
+  const FALLBACK_DAYS = {
+    'District Court': 60,
+    'BMC': 45,
+    'Housing Court': 75,
+    'Probate and Family Court': 120,
+    'The Superior Court': 180,
+    'Land Court Department': 150,
+  };
+  let predicted_days = null;
+  try {
+    const pyResult = await runPythonPrediction(
+      classification.court_department,
+      classification.case_type,
+      classification.court_location
+    );
+    predicted_days = pyResult.predicted_days;
+    console.log(`✅ Python prediction: ${predicted_days} days`);
+  } catch (pyErr) {
+    console.error('⚠️  Python prediction failed (using fallback):', pyErr.message);
+    predicted_days = FALLBACK_DAYS[classification.court_department] ?? 90;
+  }
+
+  return {
+    court_department: classification.court_department,
+    case_type: classification.case_type,
+    court_location: classification.court_location,
+    reasoning: classification.reasoning || '',
+    predicted_days,
+  };
 }
 
 // POST /api/analyze — classify incident with Gemini, predict case duration with ML model
 app.post('/api/analyze', async (req, res) => {
   try {
     const { fields = [], checkboxes = [] } = req.body;
-
-    // Build a compact incident summary for the Gemini prompt (non-empty values only)
-    const summaryLines = [];
-    for (const f of fields) {
-      if (f.value && String(f.value).trim()) {
-        summaryLines.push(`${f.label}: ${f.value}`);
-      }
-    }
-    for (const cb of checkboxes) {
-      if (cb.value === 'Yes' || cb.value === true) {
-        summaryLines.push(`${cb.label}: Yes`);
-      }
-    }
-
-    const incidentSummary = summaryLines.length > 0
-      ? summaryLines.join('\n')
-      : 'No incident details provided (blank form).';
-
-    const prompt = COURT_CLASSIFICATION_PROMPT.replace('{INCIDENT_SUMMARY}', incidentSummary);
-
-    console.log('🔍 Running Gemini court classification...');
-    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
-    const result = await model.generateContent([{ text: prompt }]);
-    let geminiText = result.response.text().trim()
-      .replace(/```json\s*/gi, '')
-      .replace(/```\s*/g, '')
-      .trim();
-
-    let classification;
-    try {
-      classification = JSON.parse(geminiText);
-    } catch {
-      const match = geminiText.match(/\{[\s\S]*\}/);
-      if (match) {
-        classification = JSON.parse(match[0]);
-      } else {
-        throw new Error('Gemini did not return valid JSON: ' + geminiText.slice(0, 300));
-      }
-    }
-
-    console.log('✅ Gemini classification:', {
-      court_department: classification.court_department,
-      case_type: classification.case_type,
-      court_location: classification.court_location,
-    });
-
-    // Run the Random Forest model
-    let predicted_days = null;
-    try {
-      const pyResult = await runPythonPrediction(
-        classification.court_department,
-        classification.case_type,
-        classification.court_location
-      );
-      predicted_days = pyResult.predicted_days;
-      console.log(`✅ Python prediction: ${predicted_days} days`);
-    } catch (pyErr) {
-      console.error('⚠️  Python prediction failed (returning null):', pyErr.message);
-    }
-
-    res.json({
-      court_department: classification.court_department,
-      case_type: classification.case_type,
-      court_location: classification.court_location,
-      reasoning: classification.reasoning || '',
-      predicted_days,
-    });
+    const incidentSummary = buildIncidentSummaryFromDoc(fields, checkboxes);
+    const result = await runAnalysisPipeline(incidentSummary);
+    res.json(result);
   } catch (err) {
     console.error('❌ Analyze error:', err);
     res.status(500).json({ error: err.message });

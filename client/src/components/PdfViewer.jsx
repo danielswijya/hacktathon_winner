@@ -1,4 +1,4 @@
-import { useEffect, useRef, useImperativeHandle, forwardRef } from 'react';
+import { useEffect, useRef, useImperativeHandle, forwardRef, useState } from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
 import { fabric } from 'fabric';
 import 'pdfjs-dist/web/pdf_viewer.css';
@@ -10,9 +10,11 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
 ).href;
 
 // PDF rendering constants - MUST match server for coordinate conversion
-const SCALE = 1.4;
+const DEFAULT_SCALE = 1.4;
 const PAGE_WIDTH_PT = 612;
 const PAGE_HEIGHT_PT = 792;
+const MIN_SCALE = 0.5;
+const MAX_SCALE = 3;
 
 // Minimal stub so AnnotationLayer doesn't crash without a real link service
 const STUB_LINK_SERVICE = {
@@ -329,6 +331,21 @@ const PdfViewer = forwardRef(function PdfViewer(
   // Map: pageNum → PDF.js canvas element (for jsPDF merging)
   const pdfCanvasesRef = useRef(new Map());
 
+  // Container width from ResizeObserver — scale PDF and overlay to fit
+  const [containerWidth, setContainerWidth] = useState(0);
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const w = entry.contentRect.width;
+        setContainerWidth(w);
+      }
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
   // Keep latest fields/checkboxes in refs so async callbacks can access them
   const fieldsRef = useRef(fields);
   const checkboxesRef = useRef(checkboxes);
@@ -361,7 +378,7 @@ const PdfViewer = forwardRef(function PdfViewer(
     },
   }));
 
-  // ── Load & render PDF whenever the buffer changes ──────────────────────
+  // ── Load & render PDF when buffer or container width changes ─────────────
   useEffect(() => {
     if (!pdfBuffer || !containerRef.current) return;
 
@@ -375,6 +392,14 @@ const PdfViewer = forwardRef(function PdfViewer(
     fabricCanvasesRef.current.forEach((fc) => fc.dispose());
     fabricCanvasesRef.current.clear();
 
+    let availableWidth = containerWidth > 0 ? containerWidth - 32 : 0;
+    if (availableWidth <= 0 && containerRef.current) {
+      const rect = containerRef.current.getBoundingClientRect();
+      availableWidth = Math.max(0, rect.width - 32);
+    }
+    if (availableWidth <= 0) availableWidth = 856.8 - 32;
+    const scale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, availableWidth / PAGE_WIDTH_PT));
+
     (async () => {
       try {
         const pdfDoc = await pdfjsLib.getDocument({ data: pdfBuffer.slice() }).promise;
@@ -383,7 +408,7 @@ const PdfViewer = forwardRef(function PdfViewer(
         // Only announce extraction if we're actually going to extract
         if (!skipExtraction && onExtractionStart) onExtractionStart(pdfDoc.numPages);
 
-        const SCALE = 1.4;
+        const SCALE = scale;
 
         for (let pageNum = 1; pageNum <= pdfDoc.numPages; pageNum++) {
           if (cancelled) return;
@@ -484,21 +509,29 @@ const PdfViewer = forwardRef(function PdfViewer(
 
           if (skipExtraction) {
             // ── Re-render saved fields without re-extracting ──────────────────
-            // Fields/checkboxes already live in parent state; just draw overlays.
+            // Fields/checkboxes already live in parent state; scale coords to current view.
             const savedFields = fieldsRef.current.filter(f => f.page === pageNum);
             const savedCbs = checkboxesRef.current.filter(cb => cb.page === pageNum);
+            const fieldScale = (f) => SCALE / (f._scale || DEFAULT_SCALE);
+            const scaleField = (f) => {
+              const k = fieldScale(f);
+              return { ...f, x: f.x * k, y: f.y * k, w: f.w * k, h: f.h * k };
+            };
+            const scaleCb = (cb) => {
+              const k = SCALE / (cb._scale || DEFAULT_SCALE);
+              return { ...cb, x: cb.x * k, y: cb.y * k, w: cb.w * k, h: cb.h * k };
+            };
 
             savedFields.forEach((f) => {
-              addFabricField(f, fabricCanvas, annotInputsRef, onAnnotationChange);
+              addFabricField(scaleField(f), fabricCanvas, annotInputsRef, onAnnotationChange);
             });
 
             savedCbs.forEach((cb) => {
-              if (cb.options && cb.options.length > 0) {
-                // Multi-option → HTML select
-                addSelectField(cb, selectContainer, annotInputsRef, onAnnotationChange);
+              const scaled = scaleCb(cb);
+              if (scaled.options && scaled.options.length > 0) {
+                addSelectField(scaled, selectContainer, annotInputsRef, onAnnotationChange);
               } else {
-                // Binary → Fabric checkbox square
-                addCheckboxField(cb, fabricCanvas, annotInputsRef, onAnnotationChange);
+                addCheckboxField(scaled, fabricCanvas, annotInputsRef, onAnnotationChange);
               }
             });
 
@@ -648,7 +681,7 @@ const PdfViewer = forwardRef(function PdfViewer(
       fabricCanvasesRef.current.forEach((fc) => fc.dispose());
       fabricCanvasesRef.current.clear();
     };
-  }, [pdfBuffer]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [pdfBuffer, containerWidth]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Table → PDF: push value changes into Fabric IText / HTML selects ───
   useEffect(() => {
