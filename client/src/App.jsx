@@ -3,6 +3,7 @@ import { jsPDF } from 'jspdf';
 import Sidebar from './components/Sidebar';
 import UploadZone from './components/UploadZone';
 import FieldsTable from './components/FieldsTable';
+import AuthGuard from './components/AuthGuard';
 import './App.css';
 
 const INCIDENT_REPORT_PDF_URL =
@@ -476,11 +477,11 @@ function App() {
     a.href = url;
     a.download = `${selectedDoc?.display_name || 'fields'}.json`;
     a.click();
-    URL.revokeObjectURL(url);
-  };
+    URL.revokeObjectURL(url);  };
 
   return (
-    <div className="app">
+    <AuthGuard>
+      <div className="app">
       <header className="header">
         <div className="header-left">
           <span className="logo">DocFlow</span>
@@ -553,11 +554,11 @@ function App() {
           onSave={handleSave}
           saveStatus={saveStatus}
           selectedDoc={selectedDoc}
-          extracting={extracting}
-          style={{ width: rightPanelWidth }}
+          extracting={extracting}          style={{ width: rightPanelWidth }}
         />
       </div>
     </div>
+    </AuthGuard>
   );
 }
 
