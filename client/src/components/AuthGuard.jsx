@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Box, Button, Typography, Paper, Avatar, Menu, MenuItem, Divider } from '@mui/material'
-import { signInWithGoogle, signOut, onAuthStateChange } from '../lib/supabase'
+import { signInWithGoogle, signOut, onAuthStateChange, getSession } from '../lib/supabase'
 
 export default function AuthGuard({ children }) {
   const [user, setUser] = useState(null)
@@ -8,9 +8,22 @@ export default function AuthGuard({ children }) {
   const [anchorEl, setAnchorEl] = useState(null)
 
   useEffect(() => {
+    console.log('🔒 AuthGuard: Initializing...')
+    
+    // Check for existing session on mount
+    const checkExistingSession = async () => {
+      console.log('🔍 Checking for existing session...')
+      const session = await getSession()
+      console.log('📋 Existing session:', session?.user?.email || 'None')
+      setUser(session?.user ?? null)
+      setLoading(false)
+    }
+
+    checkExistingSession()
+
     // Subscribe to auth state changes
     const subscription = onAuthStateChange((event, session) => {
-      console.log('Auth event:', event, session?.user?.email)
+      console.log('🔔 Auth event:', event, 'User:', session?.user?.email || 'None')
       setUser(session?.user ?? null)
       setLoading(false)
 
@@ -30,14 +43,17 @@ export default function AuthGuard({ children }) {
       }
     })
 
-    return () => subscription.unsubscribe()
+    return () => {
+      console.log('🔒 AuthGuard: Cleaning up subscription')
+      subscription.unsubscribe()
+    }
   }, [])
-
   const handleSignIn = async () => {
+    console.log('👆 Sign in button clicked')
     try {
       await signInWithGoogle()
     } catch (error) {
-      console.error('Sign in failed:', error)
+      console.error('❌ Sign in failed:', error)
       alert('Failed to sign in with Google. Please try again.')
     }
   }
@@ -48,7 +64,7 @@ export default function AuthGuard({ children }) {
       setAnchorEl(null)
       window.location.reload() // Refresh to clear state
     } catch (error) {
-      console.error('Sign out failed:', error)
+      console.error('❌ Sign out failed:', error)
       alert('Failed to sign out. Please try again.')
     }
   }
@@ -61,8 +77,11 @@ export default function AuthGuard({ children }) {
     setAnchorEl(null)
   }
 
+  console.log('🎨 AuthGuard render:', { loading, hasUser: !!user })
+
   // Loading state
   if (loading) {
+    console.log('⏳ Rendering loading state')
     return (
       <Box
         sx={{
@@ -79,9 +98,9 @@ export default function AuthGuard({ children }) {
       </Box>
     )
   }
-
   // Not authenticated - show login page
   if (!user) {
+    console.log('🚪 Rendering login page')
     return (
       <Box
         sx={{
@@ -185,8 +204,8 @@ export default function AuthGuard({ children }) {
       </Box>
     )
   }
-
   // Authenticated - show app with user menu
+  console.log('✅ Rendering app for user:', user.email)
   return (
     <>
       {/* User menu in top right */}
