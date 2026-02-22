@@ -287,11 +287,11 @@ function App() {
   // ── Streaming page-by-page field accumulation ────────────────────────────
   const handlePageExtracted = useCallback((newFields, newCheckboxes) => {
     setFields((prev) => [...prev, ...newFields]);
-    setCheckboxes((prev) => [...prev, ...newCheckboxes]);
-    setExtraction((prev) => ({ ...prev, done: prev.done + 1 }));
+    setCheckboxes((prev) => [...prev, ...newCheckboxes]);    setExtraction((prev) => ({ ...prev, done: prev.done + 1 }));
   }, []);
 
-  // ── Delete document ──────────────────────────────────────────────────────  const handleDelete = useCallback(async (docId) => {
+  // ── Delete document ──────────────────────────────────────────────────────
+  const handleDelete = useCallback(async (docId) => {
     try {
       const res = await fetch(`${API_URL}/api/documents/${docId}`, { method: 'DELETE' });
       if (res.ok) {
@@ -395,11 +395,11 @@ function App() {
       }
     } else {
       console.warn('⚠️ No PDF storage path available');
-      setPdfBuffer(null);
-    }
+      setPdfBuffer(null);    }
   };
 
-  // ── Save snapshot to Supabase ────────────────────────────────────────────  const handleSave = useCallback(async () => {
+  // ── Save snapshot to Supabase ────────────────────────────────────────────
+  const handleSave = useCallback(async () => {
     if (!selectedDoc) return;
     setSaveStatus('saving');
     try {
