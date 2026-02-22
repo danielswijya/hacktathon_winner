@@ -31,7 +31,7 @@ import {
   AccordionDetails,  Divider,
 } from '@mui/material';
 
-const API = '/api/chatbot';
+const API_URL = 'https://hacktathon-winner.onrender.com';
 
 // ── Inline SVG icons (no @mui/icons-material needed) ────────────────────────
 
@@ -128,12 +128,11 @@ export default function Chatbot({ fields = [], checkboxes = [], open = false, on
   useEffect(() => {
     chatBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [history, chatLoading]);
-
   async function runAnalysis() {
     setLoading(true);
     setAnalysisError(null);
     try {
-      const res = await fetch(`${API}/analyze`, {
+      const res = await fetch(`${API_URL}/api/chatbot/analyze`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ fields, checkboxes }),
@@ -153,10 +152,9 @@ export default function Chatbot({ fields = [], checkboxes = [], open = false, on
     if (!msg || chatLoading) return;
     setChatInput('');
     const next = [...history, { role: 'user', content: msg }];
-    setHistory(next);
-    setChatLoading(true);
+    setHistory(next);    setChatLoading(true);
     try {
-      const res = await fetch(`${API}/chat`, {
+      const res = await fetch(`${API_URL}/api/chatbot/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: msg, fields, checkboxes, history }),
@@ -189,11 +187,10 @@ export default function Chatbot({ fields = [], checkboxes = [], open = false, on
       mediaRecorder.onstop = async () => {
         stream.getTracks().forEach((t) => t.stop());
         const blob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
-        setIsTranscribing(true);
-        try {
+        setIsTranscribing(true);        try {
           const fd = new FormData();
           fd.append('audio', blob, 'recording.webm');
-          const res = await fetch(`${API}/transcribe`, { method: 'POST', body: fd });
+          const res = await fetch(`${API_URL}/api/chatbot/transcribe`, { method: 'POST', body: fd });
           const data = await res.json();
           if (data.text) setChatInput((prev) => (prev ? `${prev} ${data.text}` : data.text));
         } catch { /* ignore */ } finally {
@@ -215,10 +212,9 @@ export default function Chatbot({ fields = [], checkboxes = [], open = false, on
         setPlayingIdx(null);
         return;
       }
-    }
-    setTtsLoadingIdx(idx);
+    }    setTtsLoadingIdx(idx);
     try {
-      const res = await fetch(`${API}/speak`, {
+      const res = await fetch(`${API_URL}/api/chatbot/speak`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text }),

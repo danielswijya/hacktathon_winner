@@ -6,6 +6,9 @@ import FieldsTable from './components/FieldsTable';
 import Chatbot from './components/Chatbot';
 import './App.css';
 
+// API URL for Render deployment
+const API_URL = 'https://hacktathon-winner.onrender.com';
+
 const INCIDENT_REPORT_PDF_URL =
   'https://yipobgbwuxafchqabmhr.supabase.co/storage/v1/object/public/documents/incident-report.pdf';
 
@@ -59,14 +62,12 @@ function App() {
       }
     } catch (err) {
       console.warn('⚠️ Failed to restore from sessionStorage:', err);
-    }
-
-    // Level 3: Fetch from server (reliable fallback)
+    }    // Level 3: Fetch from server (reliable fallback)
     if (doc.id) {
       console.log('📥 Fetching PDF from server for session restore...');
       setLoading(true);
       try {
-        const res = await fetch(`/api/documents/${doc.id}/pdf`);
+        const res = await fetch(`${API_URL}/api/documents/${doc.id}/pdf`);
         if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
         const arrayBuffer = await res.arrayBuffer();
         const bytes = new Uint8Array(arrayBuffer);
@@ -195,10 +196,9 @@ function App() {
   useEffect(() => {
     fetchDocuments();
   }, []);
-
   const fetchDocuments = async () => {
     try {
-      const res = await fetch('/api/documents');
+      const res = await fetch(`${API_URL}/api/documents`);
       const data = await res.json();
       if (res.ok) setDocuments(data);
     } catch (err) {
@@ -227,11 +227,10 @@ function App() {
       const formData = new FormData();
       formData.append(
         'pdf',
-        new Blob([bytes], { type: 'application/pdf' }),
-        'Incident Report.pdf'
+        new Blob([bytes], { type: 'application/pdf' }),        'Incident Report.pdf'
       );
 
-      const uploadRes = await fetch('/api/upload', { method: 'POST', body: formData });
+      const uploadRes = await fetch(`${API_URL}/api/upload`, { method: 'POST', body: formData });
       const data = await uploadRes.json();
       if (!uploadRes.ok) throw new Error(data.error || 'Failed to create incident report record');
 
@@ -258,10 +257,8 @@ function App() {
     const bytes = new Uint8Array(arrayBuffer);
 
     const formData = new FormData();
-    formData.append('pdf', file);
-
-    try {
-      const res = await fetch('/api/upload', { method: 'POST', body: formData });
+    formData.append('pdf', file);    try {
+      const res = await fetch(`${API_URL}/api/upload`, { method: 'POST', body: formData });
       const data = await res.json();
 
       if (res.ok) {
@@ -294,10 +291,9 @@ function App() {
     setExtraction((prev) => ({ ...prev, done: prev.done + 1 }));
   }, []);
 
-  // ── Delete document ──────────────────────────────────────────────────────
-  const handleDelete = useCallback(async (docId) => {
+  // ── Delete document ──────────────────────────────────────────────────────  const handleDelete = useCallback(async (docId) => {
     try {
-      const res = await fetch(`/api/documents/${docId}`, { method: 'DELETE' });
+      const res = await fetch(`${API_URL}/api/documents/${docId}`, { method: 'DELETE' });
       if (res.ok) {
         // Clear if deleting current document
         if (selectedDoc?.id === docId) {
@@ -354,14 +350,12 @@ function App() {
       }
     } catch (err) {
       console.warn('⚠️ Failed to restore from sessionStorage:', err);
-    }
-
-    // Level 3: Fetch from server (slowest but reliable)
+    }    // Level 3: Fetch from server (slowest but reliable)
     if (doc.pdf_storage_path || doc.id) {
       console.log('📥 Fetching PDF from server...');
       setLoading(true);
       try {
-        const res = await fetch(`/api/documents/${doc.id}/pdf`);
+        const res = await fetch(`${API_URL}/api/documents/${doc.id}/pdf`);
         if (!res.ok) {
           throw new Error(`HTTP ${res.status}: ${await res.text()}`);
         }
@@ -405,12 +399,11 @@ function App() {
     }
   };
 
-  // ── Save snapshot to Supabase ────────────────────────────────────────────
-  const handleSave = useCallback(async () => {
+  // ── Save snapshot to Supabase ────────────────────────────────────────────  const handleSave = useCallback(async () => {
     if (!selectedDoc) return;
     setSaveStatus('saving');
     try {
-      const res = await fetch(`/api/documents/${selectedDoc.id}`, {
+      const res = await fetch(`${API_URL}/api/documents/${selectedDoc.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ fields, checkboxes }),
