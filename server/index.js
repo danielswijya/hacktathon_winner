@@ -774,19 +774,32 @@ async function runAnalysisPipeline(incidentSummary) {
     'Probate and Family Court': 120,
     'The Superior Court': 180,
     'Land Court Department': 150,
-  };
-  let predicted_days = null;
-  try {
-    const pyResult = await runPythonPrediction(
-      classification.court_department,
-      classification.case_type,
-      classification.court_location
-    );
-    predicted_days = pyResult.predicted_days;
-    console.log(`✅ Python prediction: ${predicted_days} days`);
-  } catch (pyErr) {
-    console.error('⚠️  Python prediction failed (using fallback):', pyErr.message);
+  };  let predicted_days = null;
+  
+  // Skip Python child process in serverless environments (Vercel, Render, etc.)
+  // Child processes are not supported on serverless platforms
+  const isServerless = process.env.VERCEL === '1' || 
+                       process.env.RENDER === 'true' || 
+                       process.env.AWS_LAMBDA_FUNCTION_NAME ||
+                       !process.env.NODE_ENV || 
+                       process.env.NODE_ENV === 'production';
+  
+  if (isServerless) {
+    console.log('⚠️  Serverless environment detected, using fallback prediction');
     predicted_days = FALLBACK_DAYS[classification.court_department] ?? 90;
+  } else {
+    try {
+      const pyResult = await runPythonPrediction(
+        classification.court_department,
+        classification.case_type,
+        classification.court_location
+      );
+      predicted_days = pyResult.predicted_days;
+      console.log(`✅ Python prediction: ${predicted_days} days`);
+    } catch (pyErr) {
+      console.error('⚠️  Python prediction failed (using fallback):', pyErr.message);
+      predicted_days = FALLBACK_DAYS[classification.court_department] ?? 90;
+    }
   }
 
   return {
