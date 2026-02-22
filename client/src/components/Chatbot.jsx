@@ -28,11 +28,10 @@ import {
   IconButton,
   Accordion,
   AccordionSummary,
-  AccordionDetails,
-  Divider,
+  AccordionDetails,  Divider,
 } from '@mui/material';
 
-const API = 'http://localhost:3001/api/chatbot';
+const API = '/api/chatbot';
 
 // ── Inline SVG icons (no @mui/icons-material needed) ────────────────────────
 
