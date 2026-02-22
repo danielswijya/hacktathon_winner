@@ -3,6 +3,9 @@ import CircularProgress from '@mui/material/CircularProgress';
 import Tabs from '@mui/material/Tabs';
 import Tab from '@mui/material/Tab';
 
+// API URL for Render deployment
+const API_URL = 'https://hacktathon-winner.onrender.com';
+
 const TYPE_COLORS = {
   text: { bg: '#eff6ff', color: '#2563eb' },
   date: { bg: '#f0fdf4', color: '#16a34a' },
@@ -45,13 +48,12 @@ function AnalysisTab({ fields, checkboxes, cachedResult, onAnalysisComplete }) {
   const result = cachedResult ?? null;
 
   const hasData = fields.length > 0 || checkboxes.length > 0;
-
   const runAnalysis = async () => {
     setStatus('loading');
     setErrorMsg('');
     onAnalysisComplete?.(null);
     try {
-      const res = await fetch('/api/analyze', {
+      const res = await fetch(`${API_URL}/api/analyze`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ fields, checkboxes }),
