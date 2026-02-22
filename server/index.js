@@ -811,6 +811,9 @@ app.post('/api/analyze', async (req, res) => {
   }
 });
 
+// ── AI Chatbot routes (separate component, mounted here) ─────────────────────
+app.use('/api/chatbot', require('./routes/chatbot'));
+
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`DocFlow server running on http://localhost:${PORT}`);

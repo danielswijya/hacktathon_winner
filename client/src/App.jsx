@@ -3,6 +3,7 @@ import { jsPDF } from 'jspdf';
 import Sidebar from './components/Sidebar';
 import UploadZone from './components/UploadZone';
 import FieldsTable from './components/FieldsTable';
+import Chatbot from './components/Chatbot';
 import './App.css';
 
 const INCIDENT_REPORT_PDF_URL =
@@ -18,6 +19,7 @@ function App() {
   const [checkboxes, setCheckboxes] = useState([]);
   const [saveStatus, setSaveStatus] = useState('idle'); // 'idle'|'saving'|'saved'|'error'
   const [toast, setToast] = useState(null);             // string | null
+  const [chatbotOpen, setChatbotOpen] = useState(false);
 
   // ── Extraction progress: { done, total } ────────────────────────────────
   const [extraction, setExtraction] = useState({ done: 0, total: 0 });
@@ -513,6 +515,7 @@ function App() {
           onSelect={handleSelectDoc}
           onNewIncidentReport={handleNewIncidentReport}
           onDelete={handleDelete}
+          onAIAdvisor={() => setChatbotOpen(true)}
         />
 
         <UploadZone
@@ -557,6 +560,7 @@ function App() {
           style={{ width: rightPanelWidth }}
         />
       </div>
+      <Chatbot fields={fields} checkboxes={checkboxes} open={chatbotOpen} onClose={() => setChatbotOpen(false)} />
     </div>
   );
 }

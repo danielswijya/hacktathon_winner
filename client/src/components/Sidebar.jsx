@@ -1,6 +1,6 @@
 import { useState } from 'react';
 
-function Sidebar({ documents, selectedDoc, onSelect, onNewIncidentReport, onDelete }) {
+function Sidebar({ documents, selectedDoc, onSelect, onNewIncidentReport, onDelete, onAIAdvisor }) {
   // Local name overrides for incident reports (persist only in-session)
   const [localNames, setLocalNames] = useState({});
 
@@ -111,7 +111,7 @@ function Sidebar({ documents, selectedDoc, onSelect, onNewIncidentReport, onDele
       )}
 
       {/* AI Advisor Box — pinned to sidebar bottom */}
-      <div className="ai-advisor-box">
+      <div className="ai-advisor-box" onClick={onAIAdvisor} style={{ cursor: 'pointer' }}>
         <div className="ai-advisor-icon">✨</div>
         <div className="ai-advisor-content">
           <span className="ai-advisor-title">Talk with an AI Advisor</span>
