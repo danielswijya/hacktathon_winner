@@ -5,39 +5,8 @@ import UploadZone from './components/UploadZone';
 import FieldsTable from './components/FieldsTable';
 import './App.css';
 
-// ── DCAMM Incident Report schema (hardcoded coordinates in canvas pixels) ──
-const DCAMM_FIELDS = [
-  { label: 'Date of Incident',    key: 'incident_date',      type: 'date',     page: 1, x: 320, y: 145, w: 180, h: 24 },
-  { label: 'Time of Incident',    key: 'incident_time',      type: 'text',     page: 1, x: 320, y: 170, w: 180, h: 24 },
-  { label: 'Day of Week',         key: 'day_of_week',        type: 'text',     page: 1, x: 320, y: 195, w: 180, h: 24 },
-  { label: 'Date of Report',      key: 'report_date',        type: 'date',     page: 1, x: 320, y: 220, w: 180, h: 24 },
-  { label: 'Report By',           key: 'report_by',          type: 'text',     page: 1, x: 320, y: 245, w: 180, h: 24 },
-  { label: 'Location',            key: 'location',           type: 'text',     page: 1, x: 320, y: 270, w: 300, h: 24 },
-  { label: 'Involved Party',      key: 'involved_party',     type: 'text',     page: 1, x: 200, y: 340, w: 250, h: 24 },
-  { label: 'Telephone',           key: 'telephone',          type: 'text',     page: 1, x: 200, y: 365, w: 180, h: 24 },
-  { label: 'Injury Description',  key: 'injury_description', type: 'text',     page: 1, x: 200, y: 430, w: 350, h: 24 },
-  { label: 'Witness 1',           key: 'witness_1',          type: 'text',     page: 1, x: 200, y: 390, w: 250, h: 24 },
-  { label: 'Witness 2',           key: 'witness_2',          type: 'text',     page: 1, x: 200, y: 415, w: 250, h: 24 },
-  { label: 'Medical Bills ($)',   key: 'medical_bills',      type: 'currency', page: 1, x: 200, y: 455, w: 150, h: 24 },
-  { label: 'Lost Wages ($)',      key: 'lost_wages',         type: 'currency', page: 1, x: 200, y: 480, w: 150, h: 24 },
-  { label: 'Property Damage ($)', key: 'property_damage',    type: 'currency', page: 1, x: 200, y: 505, w: 150, h: 24 },
-];
-
-const DCAMM_CHECKBOXES = [
-  { label: 'Injury',       key: 'type_injury',     options: ['Yes', 'No'], page: 1, x: 120, y: 310, w: 20, h: 20 },
-  { label: 'Fire',         key: 'type_fire',        options: ['Yes', 'No'], page: 1, x: 120, y: 330, w: 20, h: 20 },
-  { label: 'MV Accident',  key: 'type_mv_accident', options: ['Yes', 'No'], page: 1, x: 120, y: 350, w: 20, h: 20 },
-  { label: 'Theft',        key: 'type_theft',       options: ['Yes', 'No'], page: 1, x: 120, y: 370, w: 20, h: 20 },
-  { label: 'Injuries Y/N', key: 'injuries_yn',      options: ['Yes', 'No'], page: 1, x: 200, y: 410, w: 20, h: 20 },
-];
-
 const INCIDENT_REPORT_PDF_URL =
   'https://yipobgbwuxafchqabmhr.supabase.co/storage/v1/object/public/documents/incident-report.pdf';
-
-// Helper: detect if a document is a DCAMM incident report by filename
-function isReportDoc(doc) {
-  return (doc?.display_name || doc?.filename || '').includes('Incident Report');
-}
 
 function App() {
   const [documents, setDocuments] = useState([]);
@@ -50,10 +19,6 @@ function App() {
   const [saveStatus, setSaveStatus] = useState('idle'); // 'idle'|'saving'|'saved'|'error'
   const [toast, setToast] = useState(null);             // string | null
 
-  // Static mode: set when viewing a DCAMM incident report
-  const [staticFields, setStaticFields] = useState(null);
-  const [staticCheckboxes, setStaticCheckboxes] = useState(null);
-
   // ── Extraction progress: { done, total } ────────────────────────────────
   const [extraction, setExtraction] = useState({ done: 0, total: 0 });
   const extracting = extraction.total > 0 && extraction.done < extraction.total;
@@ -63,6 +28,139 @@ function App() {
 
   // ── Ref to PdfViewer for getPageCanvases() ──────────────────────────────
   const pdfViewerRef = useRef(null);
+
+  // ── PDF-only fetch: load PDF buffer without resetting field state ────────
+  // Used by session restore so user's unsaved edits are not overwritten.
+  const fetchPdfForDoc = async (doc) => {
+    // Level 1: Check in-memory cache (fastest)
+    const cachedBuffer = pdfCacheRef.current.get(doc.id);
+    if (cachedBuffer) {
+      console.log('✅ PDF found in memory cache');
+      setPdfBuffer(cachedBuffer);
+      return;
+    }
+
+    // Level 2: Check sessionStorage (fast)
+    try {
+      const sessionKey = `pdf_buffer_${doc.id}`;
+      const sessionData = sessionStorage.getItem(sessionKey);
+      if (sessionData) {
+        console.log('✅ PDF found in session storage');
+        const binaryString = atob(sessionData);
+        const bytes = new Uint8Array(binaryString.length);
+        for (let i = 0; i < binaryString.length; i++) {
+          bytes[i] = binaryString.charCodeAt(i);
+        }
+        pdfCacheRef.current.set(doc.id, bytes);
+        setPdfBuffer(bytes);
+        return;
+      }
+    } catch (err) {
+      console.warn('⚠️ Failed to restore from sessionStorage:', err);
+    }
+
+    // Level 3: Fetch from server (reliable fallback)
+    if (doc.id) {
+      console.log('📥 Fetching PDF from server for session restore...');
+      setLoading(true);
+      try {
+        const res = await fetch(`/api/documents/${doc.id}/pdf`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+        const arrayBuffer = await res.arrayBuffer();
+        const bytes = new Uint8Array(arrayBuffer);
+        pdfCacheRef.current.set(doc.id, bytes);
+        try {
+          const binaryString = Array.from(bytes).map(b => String.fromCharCode(b)).join('');
+          const base64 = btoa(binaryString);
+          if (base64.length < 5 * 1024 * 1024) {
+            sessionStorage.setItem(`pdf_buffer_${doc.id}`, base64);
+          }
+        } catch { /* sessionStorage full */ }
+        setPdfBuffer(bytes);
+        console.log('✅ PDF fetched for session restore');
+      } catch (err) {
+        console.error('❌ Failed to fetch PDF for session restore:', err);
+        setError(`Failed to load PDF: ${err.message}`);
+      } finally {
+        setLoading(false);
+      }
+    }
+  };
+
+  // ── Session persistence: save/restore viewer state on refresh ───────────
+  useEffect(() => {
+    // Restore state from sessionStorage on mount
+    const lastDocId = sessionStorage.getItem('last_selected_doc_id');
+
+    if (lastDocId) {
+      const sessionKey = `doc_state_${lastDocId}`;
+      const savedState = sessionStorage.getItem(sessionKey);
+
+      if (savedState) {
+        try {
+          const parsed = JSON.parse(savedState);
+          console.log('🔄 Restoring last session for doc:', lastDocId);
+
+          // Restore document state (fields/checkboxes = user's current in-memory values)
+          setSelectedDoc(parsed.selectedDoc);
+          setFields(parsed.fields || []);
+          setCheckboxes(parsed.checkboxes || []);
+
+          // Only fetch the PDF — do NOT call handleSelectDoc which would
+          // overwrite fields with the empty DB-saved values.
+          fetchPdfForDoc(parsed.selectedDoc);
+
+          console.log('✅ Session state restored');
+        } catch (err) {
+          console.error('Failed to restore session state:', err);
+          sessionStorage.removeItem(sessionKey);
+          sessionStorage.removeItem('last_selected_doc_id');
+        }
+      }
+    }
+  }, []); // Empty deps - only run once on mount
+
+  // Track last selected document for session restore
+  useEffect(() => {
+    if (selectedDoc?.id) {
+      sessionStorage.setItem('last_selected_doc_id', selectedDoc.id);
+    }
+  }, [selectedDoc]);
+
+  // Save state to sessionStorage whenever it changes
+  useEffect(() => {
+    if (!selectedDoc || !pdfBuffer) {
+      return; // Don't clear session - keep per-document caches
+    }
+
+    try {
+      // Save document-specific session state
+      const sessionKey = `doc_state_${selectedDoc.id}`;
+      const state = {
+        selectedDoc,
+        fields,
+        checkboxes,
+        timestamp: Date.now(),
+      };
+
+      sessionStorage.setItem(sessionKey, JSON.stringify(state));
+      
+      // Save PDF buffer separately (with size check)
+      const pdfKey = `pdf_buffer_${selectedDoc.id}`;
+      const binaryString = Array.from(pdfBuffer)
+        .map(byte => String.fromCharCode(byte))
+        .join('');
+      const base64 = btoa(binaryString);
+      
+      if (base64.length < 5 * 1024 * 1024) { // 5MB limit
+        sessionStorage.setItem(pdfKey, base64);
+      }
+      
+      console.log('💾 Saved document state to session');
+    } catch (err) {
+      console.error('Failed to save session state:', err);
+    }
+  }, [selectedDoc, pdfBuffer, fields, checkboxes]);
 
   // ── Resizable right panel ────────────────────────────────────────────────
   const [rightPanelWidth, setRightPanelWidth] = useState(440);
@@ -138,10 +236,8 @@ function App() {
       pdfCacheRef.current.set(data.id, bytes);
       setSelectedDoc(data);
       setPdfBuffer(bytes);
-      setFields(DCAMM_FIELDS.map((f) => ({ ...f, value: '' })));
-      setCheckboxes(DCAMM_CHECKBOXES.map((cb) => ({ ...cb, value: null })));
-      setStaticFields(DCAMM_FIELDS);
-      setStaticCheckboxes(DCAMM_CHECKBOXES);
+      setFields([]);
+      setCheckboxes([]);
       await fetchDocuments();
     } catch (err) {
       setError(err.message);
@@ -173,8 +269,6 @@ function App() {
         // Fields stream in page-by-page via onPageExtracted
         setFields([]);
         setCheckboxes([]);
-        setStaticFields(null);
-        setStaticCheckboxes(null);
         await fetchDocuments();
       } else {
         setError(data.error || 'Upload failed');
@@ -198,24 +292,114 @@ function App() {
     setExtraction((prev) => ({ ...prev, done: prev.done + 1 }));
   }, []);
 
-  const handleSelectDoc = (doc) => {
+  // ── Delete document ──────────────────────────────────────────────────────
+  const handleDelete = useCallback(async (docId) => {
+    try {
+      const res = await fetch(`/api/documents/${docId}`, { method: 'DELETE' });
+      if (res.ok) {
+        // Clear if deleting current document
+        if (selectedDoc?.id === docId) {
+          setSelectedDoc(null);
+          setPdfBuffer(null);
+          setFields([]);
+          setCheckboxes([]);
+          setExtraction({ done: 0, total: 0 });
+        }
+        // Remove from cache
+        pdfCacheRef.current.delete(docId);
+        await fetchDocuments();
+        showToast('Document deleted');
+      }
+    } catch (err) {
+      console.error('Delete error:', err);
+      showToast('Failed to delete document');
+    }
+  }, [selectedDoc, showToast]);
+
+  const handleSelectDoc = async (doc) => {
+    console.log('📄 Selecting document:', doc.display_name);
     setSelectedDoc(doc);
     setFields(doc.fields || []);
     setCheckboxes(doc.checkboxes || []);
     setError(null);
     setSaveStatus('idle');
     setExtraction({ done: 0, total: 0 });
-    // Restore from session cache if available
-    const cached = pdfCacheRef.current.get(doc.id);
-    setPdfBuffer(cached || null);
 
-    // Restore static mode if it's an incident report
-    if (isReportDoc(doc)) {
-      setStaticFields(DCAMM_FIELDS);
-      setStaticCheckboxes(DCAMM_CHECKBOXES);
+    // Smart caching strategy: Memory → Session → Remote
+    
+    // Level 1: Check in-memory cache (fastest)
+    const cachedBuffer = pdfCacheRef.current.get(doc.id);
+    if (cachedBuffer) {
+      console.log('✅ PDF found in memory cache');
+      setPdfBuffer(cachedBuffer);
+      return;
+    }
+
+    // Level 2: Check sessionStorage (fast)
+    try {
+      const sessionKey = `pdf_buffer_${doc.id}`;
+      const sessionData = sessionStorage.getItem(sessionKey);
+      if (sessionData) {
+        console.log('✅ PDF found in session storage');
+        const binaryString = atob(sessionData);
+        const bytes = new Uint8Array(binaryString.length);
+        for (let i = 0; i < binaryString.length; i++) {
+          bytes[i] = binaryString.charCodeAt(i);
+        }
+        pdfCacheRef.current.set(doc.id, bytes);
+        setPdfBuffer(bytes);
+        return;
+      }
+    } catch (err) {
+      console.warn('⚠️ Failed to restore from sessionStorage:', err);
+    }
+
+    // Level 3: Fetch from server (slowest but reliable)
+    if (doc.pdf_storage_path || doc.id) {
+      console.log('📥 Fetching PDF from server...');
+      setLoading(true);
+      try {
+        const res = await fetch(`/api/documents/${doc.id}/pdf`);
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+        }
+        
+        const arrayBuffer = await res.arrayBuffer();
+        const bytes = new Uint8Array(arrayBuffer);
+        
+        // Store in all cache levels for next time
+        pdfCacheRef.current.set(doc.id, bytes);
+        
+        // Store in sessionStorage (with size limit check)
+        try {
+          const binaryString = Array.from(bytes)
+            .map(byte => String.fromCharCode(byte))
+            .join('');
+          const base64 = btoa(binaryString);
+          
+          // Only cache if under 5MB to avoid quota errors
+          if (base64.length < 5 * 1024 * 1024) {
+            sessionStorage.setItem(`pdf_buffer_${doc.id}`, base64);
+            console.log('💾 PDF cached to sessionStorage');
+          } else {
+            console.warn('⚠️ PDF too large for sessionStorage, using memory cache only');
+          }
+        } catch (storageErr) {
+          console.warn('⚠️ sessionStorage full, using memory cache only');
+        }
+        
+        setPdfBuffer(bytes);
+        console.log('✅ PDF fetched and cached');
+      } catch (err) {
+        console.error('❌ Failed to fetch PDF:', err);
+        setError(`Failed to load PDF: ${err.message}`);
+        setPdfBuffer(null);
+      } finally {
+        setLoading(false);
+      }
     } else {
-      setStaticFields(null);
-      setStaticCheckboxes(null);
+      console.warn('⚠️ No PDF storage path available');
+      setPdfBuffer(null);
     }
   };
 
@@ -276,52 +460,11 @@ function App() {
     );
   }, []);
 
-  // ── jsPDF canvas-burn download ───────────────────────────────────────────
-  const handleDownloadJsPdf = useCallback(async () => {
-    if (!pdfViewerRef.current) return;
-    const canvases = pdfViewerRef.current.getPageCanvases();
-    if (!canvases || canvases.length === 0) return;
-
-    const first = canvases[0];
-    const pdf = new jsPDF('p', 'px', [first.width, first.height]);
-    canvases.forEach((canvas, i) => {
-      if (i > 0) pdf.addPage([canvas.width, canvas.height], 'p');
-      pdf.addImage(
-        canvas.toDataURL('image/jpeg', 0.95),
-        'JPEG', 0, 0, canvas.width, canvas.height
-      );
-    });
-    pdf.save(`incident-report-${Date.now()}.pdf`);
-  }, []);
-
-  // ── Server-side filled PDF download (generic PDFs) ───────────────────────
-  const handleDownloadPdf = useCallback(async () => {
-    if (!pdfBuffer || !selectedDoc) return;
-    const formData = new FormData();
-    formData.append('pdf', new Blob([pdfBuffer], { type: 'application/pdf' }), 'document.pdf');
-    formData.append('fields', JSON.stringify(fields));
-    formData.append('checkboxes', JSON.stringify(checkboxes));
-    try {
-      const res = await fetch('/api/fill-pdf', { method: 'POST', body: formData });
-      if (!res.ok) { console.error('fill-pdf failed:', await res.text()); return; }
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${selectedDoc?.display_name || 'filled'}.pdf`;
-      a.click();
-      URL.revokeObjectURL(url);
-    } catch (err) {
-      console.error('fill-pdf error:', err);
-    }
-  }, [pdfBuffer, selectedDoc, fields, checkboxes]);
-
   // ── JSON download ────────────────────────────────────────────────────────
   const handleDownload = () => {
     const payload = {
       filename: selectedDoc?.display_name || selectedDoc?.filename,
       exported_at: new Date().toISOString(),
-      ...(isReportDoc(selectedDoc) && { template: 'dcamm-incident-report' }),
       fields,
       checkboxes,
     };
@@ -335,8 +478,6 @@ function App() {
     a.click();
     URL.revokeObjectURL(url);
   };
-
-  const isIncidentReport = !!staticFields;
 
   return (
     <div className="app">
@@ -371,6 +512,7 @@ function App() {
           selectedDoc={selectedDoc}
           onSelect={handleSelectDoc}
           onNewIncidentReport={handleNewIncidentReport}
+          onDelete={handleDelete}
         />
 
         <UploadZone
@@ -389,12 +531,8 @@ function App() {
             setFields([]);
             setCheckboxes([]);
             setExtraction({ done: 0, total: 0 });
-            setStaticFields(null);
-            setStaticCheckboxes(null);
           }}
           pdfViewerRef={pdfViewerRef}
-          staticFields={staticFields}
-          staticCheckboxes={staticCheckboxes}
         />
 
         {/* Draggable resizer between center and right panel */}
@@ -412,9 +550,6 @@ function App() {
           onFieldKeyChange={handleFieldKeyChange}
           onCheckboxKeyChange={handleCheckboxKeyChange}
           onDownload={handleDownload}
-          onDownloadPdf={isIncidentReport ? null : handleDownloadPdf}
-          onDownloadJsPdf={isIncidentReport ? handleDownloadJsPdf : null}
-          hasPdfBuffer={!!pdfBuffer}
           onSave={handleSave}
           saveStatus={saveStatus}
           selectedDoc={selectedDoc}

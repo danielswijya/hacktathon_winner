@@ -1,16 +1,20 @@
 import { useState } from 'react';
 
-function Sidebar({ documents, selectedDoc, onSelect, onNewIncidentReport }) {
+function Sidebar({ documents, selectedDoc, onSelect, onNewIncidentReport, onDelete }) {
   // Local name overrides for incident reports (persist only in-session)
   const [localNames, setLocalNames] = useState({});
 
   const formatDate = (iso) => {
+    if (!iso) return '';
     const d = new Date(iso);
+    if (isNaN(d.getTime())) return '';
     return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
   };
 
   const formatTime = (iso) => {
+    if (!iso) return '';
     const d = new Date(iso);
+    if (isNaN(d.getTime())) return '';
     return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
   };
 
@@ -47,6 +51,8 @@ function Sidebar({ documents, selectedDoc, onSelect, onNewIncidentReport }) {
             const cbCount = (doc.checkboxes || []).length;
             const displayName =
               localNames[doc.id] || doc.display_name || doc.filename;
+            const dateStr = formatDate(doc.created_at);
+            const timeStr = formatTime(doc.created_at);
 
             return (
               <li
@@ -70,9 +76,11 @@ function Sidebar({ documents, selectedDoc, onSelect, onNewIncidentReport }) {
                   ) : (
                     <span className="doc-name">{displayName}</span>
                   )}
-                  <span className="doc-meta">
-                    {formatDate(doc.created_at)} · {formatTime(doc.created_at)}
-                  </span>
+                  {(dateStr || timeStr) && (
+                    <span className="doc-meta">
+                      {[dateStr, timeStr].filter(Boolean).join(' · ')}
+                    </span>
+                  )}
                   <div className="doc-badges">
                     {fieldCount > 0 && (
                       <span className="doc-badge">{fieldCount} fields</span>
@@ -87,11 +95,33 @@ function Sidebar({ documents, selectedDoc, onSelect, onNewIncidentReport }) {
                     )}
                   </div>
                 </div>
+                <button
+                  className="doc-item-delete"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (confirm(`Delete "${displayName}"?`)) {
+                      onDelete(doc.id);
+                    }
+                  }}
+                  title="Delete document"
+                >
+                  ×
+                </button>
               </li>
             );
           })}
         </ul>
       )}
+
+      {/* AI Advisor Box — pinned to sidebar bottom */}
+      <div className="ai-advisor-box">
+        <div className="ai-advisor-icon">✨</div>
+        <div className="ai-advisor-content">
+          <span className="ai-advisor-title">Talk with an AI Advisor</span>
+          <span className="ai-advisor-sub">Get help filling out your report</span>
+        </div>
+        <div className="ai-advisor-arrow">›</div>
+      </div>
     </aside>
   );
 }

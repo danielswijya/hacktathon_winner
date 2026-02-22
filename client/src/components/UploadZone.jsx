@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useRef } from 'react';
 import PdfViewer from './PdfViewer';
 
 function UploadZone({
@@ -13,21 +13,12 @@ function UploadZone({
   onExtractionStart,
   onNewUpload,
   pdfViewerRef,
-  staticFields,
-  staticCheckboxes,
 }) {
-  const [dragging, setDragging] = useState(false);
+  // If the doc already has fields/checkboxes in state, skip re-extraction and
+  // just redraw the canvas overlays from the saved data. This prevents duplicates
+  // when switching between documents or reloading the page.
+  const skipExtraction = fields.length > 0 || checkboxes.length > 0;
   const fileRef = useRef();
-
-  const handleDrop = (e) => {
-    e.preventDefault();
-    setDragging(false);
-    const file = e.dataTransfer.files[0];
-    if (file && file.type === 'application/pdf') onUpload(file);
-  };
-
-  const handleDragOver = (e) => { e.preventDefault(); setDragging(true); };
-  const handleDragLeave = (e) => { e.preventDefault(); setDragging(false); };
 
   const handleFileChange = (e) => {
     const file = e.target.files[0];
@@ -74,6 +65,7 @@ function UploadZone({
 
           {pdfBuffer ? (
             <PdfViewer
+              key={selectedDoc.id}
               ref={pdfViewerRef}
               pdfBuffer={pdfBuffer}
               fields={fields}
@@ -81,8 +73,8 @@ function UploadZone({
               onAnnotationChange={onAnnotationChange}
               onPageExtracted={onPageExtracted}
               onExtractionStart={onExtractionStart}
-              staticFields={staticFields}
-              staticCheckboxes={staticCheckboxes}
+              selectedDoc={selectedDoc}
+              skipExtraction={skipExtraction}
             />
           ) : (
             <div className="pdf-unavailable">
@@ -98,16 +90,7 @@ function UploadZone({
 
   return (
     <main className="center">
-      <div
-        className={`drop-zone ${dragging ? 'drop-zone--active' : ''}`}
-        onDragOver={handleDragOver}
-        onDragLeave={handleDragLeave}
-        onDrop={handleDrop}
-        onClick={() => fileRef.current.click()}
-        role="button"
-        tabIndex={0}
-        onKeyDown={(e) => e.key === 'Enter' && fileRef.current.click()}
-      >
+      <div className="empty-state">
         <input
           ref={fileRef}
           type="file"
@@ -115,16 +98,15 @@ function UploadZone({
           onChange={handleFileChange}
           style={{ display: 'none' }}
         />
-        <div className="drop-icon">{dragging ? '⬇️' : '📄'}</div>
-        <p className="drop-title">
-          {dragging ? 'Drop your PDF here' : 'Drag & drop a PDF'}
-        </p>
-        <p className="drop-hint">or click to browse · or use sidebar button for incident reports</p>
-        <div className="drop-specs">
-          <span>PDF only</span>
-          <span>·</span>
-          <span>Max 30 MB</span>
-        </div>
+        <div className="empty-icon">📄</div>
+        <p className="empty-title">No document selected</p>
+        <p className="empty-hint">Click "New Incident Report" or select a document from the sidebar</p>
+        <button 
+          className="btn-outline"
+          onClick={() => fileRef.current.click()}
+        >
+          Upload PDF
+        </button>
       </div>
     </main>
   );

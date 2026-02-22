@@ -3,6 +3,8 @@ const express = require('express');
 const multer = require('multer');
 const cors = require('cors');
 const zlib = require('zlib');
+const path = require('path');
+const { spawn } = require('child_process');
 const { createClient } = require('@supabase/supabase-js');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { PDFDocument, PDFName, PDFArray, PDFDict, StandardFonts, rgb } = require('pdf-lib');
@@ -19,7 +21,7 @@ const upload = multer({
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
-  process.env.SUPABASE_ANON_KEY
+  process.env.SUPABASE_SERVICE_ROLE_KEY // Service role bypasses RLS
 );
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
@@ -31,8 +33,8 @@ function getDisplayName(storageFilename) {
   return storageFilename.replace(/^\d{13}-/, '');
 }
 
-// Per-page Gemini prompt — receives a single rendered page image, returns label/key/type only
-const PAGE_EXTRACT_PROMPT = `You are a legal form field extractor. Look at this PDF page image and identify ALL fillable fields. Return ONLY this JSON, no markdown:
+// Per-page Gemini prompt — receives a single rendered page image, returns label/key/type with percentage coordinates
+const PAGE_EXTRACT_PROMPT = `You are a legal form field extractor. Look at this PDF page image and identify ALL fillable fields with their exact locations. Return ONLY this JSON, no markdown:
 {
   "fields": [
     {
@@ -40,7 +42,12 @@ const PAGE_EXTRACT_PROMPT = `You are a legal form field extractor. Look at this 
       "key": "snake_case_key",
       "value": "",
       "type": "text | date | currency | number | signature",
-      "page": 1
+      "page": 1,
+      "x_pct": 0.45,
+      "y_pct": 0.23,
+      "w_pct": 0.15,
+      "h_pct": 0.02,
+      "format": "mm/dd/yyyy"
     }
   ],
   "checkboxes": [
@@ -49,7 +56,11 @@ const PAGE_EXTRACT_PROMPT = `You are a legal form field extractor. Look at this 
       "key": "snake_case_key",
       "value": null,
       "options": ["option 1", "option 2"],
-      "page": 1
+      "page": 1,
+      "x_pct": 0.12,
+      "y_pct": 0.55,
+      "w_pct": 0.02,
+      "h_pct": 0.02
     }
   ]
 }
@@ -57,10 +68,13 @@ Rules:
 - value is always empty string or null since this is a blank form
 - type must be one of: text, date, currency, number, signature
 - keys must be unique snake_case, no duplicates
+- x_pct, y_pct, w_pct, h_pct are fractions (0.0-1.0) of page width/height; x_pct/y_pct are the left/top edges of the fillable blank
+- format: for date fields only — the date format printed on the form near the field (e.g. "mm/dd/yyyy", "dd/mm/yyyy"); omit if not visible
 - List fields top-to-bottom, left-to-right as they appear on the page`;
 
 // ── Content stream parser: finds horizontal lines and box rectangles in flat PDFs ──
-function parseContentStream(bytes, pageNum) {
+// pageWidth (in PDF points) is used to reject full-width border lines.
+function parseContentStream(bytes, pageNum, pageWidth) {
   let text;
   try { text = new TextDecoder('latin1').decode(bytes); } catch { return []; }
 
@@ -68,25 +82,33 @@ function parseContentStream(bytes, pageNum) {
   const results = [];
   const stack = [];
   let mx = 0, my = 0;
+  let lineWidth = 1; // tracks current PDF line width set by 'w' operator
 
   for (const tok of tokens) {
     const n = parseFloat(tok);
     if (!isNaN(n) && tok !== '') { stack.push(n); continue; }
 
-    if (tok === 'm' && stack.length >= 2) {
+    if (tok === 'w' && stack.length >= 1) {
+      lineWidth = stack.pop(); // PDF 'w' operator sets line width
+    } else if (tok === 'm' && stack.length >= 2) {
       my = stack.pop(); mx = stack.pop();
     } else if ((tok === 'l' || tok === 'L') && stack.length >= 2) {
       const ly = stack.pop(), lx = stack.pop();
-      if (Math.abs(ly - my) < 2 && Math.abs(lx - mx) > 50) {
+      const lineLen = Math.abs(lx - mx);
+      const isHorizontal = Math.abs(ly - my) < 2;
+      const isFieldWidth  = lineLen > 50;
+      // Reject full-width horizontal rules (borders, section dividers) — keep only lines < 85% of page width
+      const isNotBorder   = !pageWidth || lineLen < pageWidth * 0.85;
+      // Reject thick lines (borders, decorative rules) — field underlines are typically ≤1.5pt
+      const isThinLine    = lineWidth <= 1.5;
+      if (isHorizontal && isFieldWidth && isNotBorder && isThinLine) {
         const x = Math.min(mx, lx);
-        const w = Math.abs(lx - mx);
-        const h = 20; // estimated field height above the underline
-        results.push({ x, y: my, w, h, page: pageNum, kind: 'line' });
+        results.push({ x, y: my, w: lineLen, h: 20, page: pageNum, kind: 'line' });
       }
       mx = lx; my = ly;
     } else if (tok === 're' && stack.length >= 4) {
       const h = stack.pop(), w = stack.pop(), y = stack.pop(), x = stack.pop();
-      if (h < 40 && w > 50) {
+      if (h < 40 && w > 50 && (!pageWidth || w < pageWidth * 0.85)) {
         results.push({ x, y, w, h, page: pageNum, kind: 'rect' });
       }
     } else if ('SsfFbBqQ'.includes(tok) && tok.length === 1) {
@@ -146,6 +168,7 @@ app.post(
       if (!acroformFound) {
         for (let pi = 0; pi < pages.length; pi++) {
           const page = pages[pi];
+          const { width: pageWidthPts } = page.getSize();
           const contentsRef = page.node.get(PDFName.of('Contents'));
           if (!contentsRef) continue;
 
@@ -165,7 +188,7 @@ app.post(
             if (filter && filter.toString() === '/FlateDecode') {
               try { bytes = zlib.inflateSync(Buffer.from(bytes)); } catch { continue; }
             }
-            coords.push(...parseContentStream(bytes, pi + 1));
+            coords.push(...parseContentStream(bytes, pi + 1, pageWidthPts));
           }
         }
       }
@@ -205,22 +228,92 @@ app.post('/api/fill-pdf', upload.single('pdf'), async (req, res) => {
         try { const cb = form.getCheckBox(item.name); if (item.value) cb.check(); else cb.uncheck(); } catch { /* skip */ }
       }
     } else {
-      // Flat PDF: draw text at stored PDF-point coordinates
+      // Flat PDF: draw text using canvas metadata for accurate coordinate conversion
       const helvetica = await pdfDoc.embedFont(StandardFonts.Helvetica);
       const pages = pdfDoc.getPages();
 
+      // Helper: Convert canvas pixel coordinates to PDF points
+      // Canvas: origin at top-left, y increases downward
+      // PDF: origin at bottom-left, y increases upward
+      function canvasToPdfCoords(item) {
+        const scale = item._scale || 1.4;
+        const canvasHeight = item._canvasHeight || (792 * scale);
+        
+        console.log(`Converting field: ${item.key || 'unknown'}`);
+        console.log(`  Canvas: x=${item.x}, y=${item.y}, w=${item.w}, h=${item.h}`);
+        console.log(`  Scale: ${scale}, Canvas Height: ${canvasHeight}`);
+        
+        // Convert x: canvas pixels → PDF points
+        const pdfX = item.x / scale;
+        
+        // Convert y: flip coordinate system
+        // Canvas y=0 is top, PDF y=0 is bottom
+        // item.y is the TOP of the field in canvas coordinates
+        // We need the BOTTOM of the field in PDF coordinates
+        const pdfY = (canvasHeight - item.y - (item.h || 20)) / scale;
+        
+        const pdfW = (item.w || 100) / scale;
+        const pdfH = (item.h || 20) / scale;
+
+        console.log(`  PDF: x=${pdfX.toFixed(2)}, y=${pdfY.toFixed(2)}, w=${pdfW.toFixed(2)}, h=${pdfH.toFixed(2)}`);
+
+        return { x: pdfX, y: pdfY, width: pdfW, height: pdfH };
+      }
+
       for (const item of allItems) {
-        if (!item.value || item.xPts == null) continue;
+        if (!item.value) continue;
         const page = pages[(item.page || 1) - 1];
         if (!page) continue;
-        page.drawText(String(item.value), {
-          x: item.xPts + 2,
-          y: item.yPts + 4,   // baseline slightly above bottom of field rect
-          size: 10,
-          font: helvetica,
-          color: rgb(0.07, 0.07, 0.15),
-          maxWidth: item.wPts - 4,
-        });
+        
+        // Convert canvas coordinates to PDF coordinates
+        const coords = canvasToPdfCoords(item);
+        
+        // For checkboxes, draw a checkmark if value is "Yes"
+        if (item.value === 'Yes' || item.value === true) {
+          // Draw checkbox rectangle
+          page.drawRectangle({
+            x: coords.x,
+            y: coords.y,
+            width: coords.width,
+            height: coords.height,
+            borderColor: rgb(0.231, 0.51, 0.965), // rgba(59,130,246,0.8)
+            borderWidth: 1.43, // 2px / 1.4
+            color: rgb(1, 1, 1), // White background
+            opacity: 0.95,
+          });
+          
+          // Draw green checkmark
+          page.drawText('✓', {
+            x: coords.x + (coords.width * 0.15),
+            y: coords.y + (coords.height * 0.1),
+            size: coords.height * 0.9,
+            font: helvetica,
+            color: rgb(0.09, 0.64, 0.29), // Green (#16a34a)
+          });
+        } else {
+          // Regular text field - draw background rectangle
+          page.drawRectangle({
+            x: coords.x,
+            y: coords.y,
+            width: coords.width,
+            height: coords.height,
+            color: rgb(1, 1, 1), // White background
+            opacity: 0.95,
+            borderColor: rgb(0.231, 0.51, 0.965), // rgba(59,130,246,0.8)
+            borderWidth: 1.07, // 1.5px / 1.4
+          });
+          
+          // Draw text
+          const fontSize = 12; // Matches FIELD_STYLE
+          page.drawText(String(item.value), {
+            x: coords.x + 2.86, // 4px padding / 1.4
+            y: coords.y + (coords.height * 0.2), // Vertical alignment
+            size: fontSize,
+            font: helvetica,
+            color: rgb(0.067, 0.094, 0.153), // #111827
+            maxWidth: coords.width - 5.71, // 8px total padding / 1.4
+          });
+        }
       }
     }
 
@@ -234,14 +327,36 @@ app.post('/api/fill-pdf', upload.single('pdf'), async (req, res) => {
   }
 });
 
-// POST /api/upload — save PDF filename to DB immediately, no Gemini call
+// POST /api/upload — upload PDF to Supabase Storage + save metadata to DB
 app.post('/api/upload', upload.single('pdf'), async (req, res) => {
   try {
     const file = req.file;
     if (!file) return res.status(400).json({ error: 'No file uploaded' });
 
-    const storageFilename = `${Date.now()}-${file.originalname}`;
+    const timestamp = Date.now();
+    const storageFilename = `${timestamp}-${file.originalname}`;
+    const storagePath = `pdfs/${storageFilename}`;
 
+    console.log(`📤 Uploading PDF to Supabase Storage: ${storagePath}`);
+
+    // Upload PDF to Supabase Storage bucket
+    const { data: uploadData, error: uploadError } = await supabase.storage
+      .from('documents') // Make sure this bucket exists in Supabase
+      .upload(storagePath, file.buffer, {
+        contentType: 'application/pdf',
+        upsert: false,
+        cacheControl: '3600',
+      });
+
+    if (uploadError) {
+      console.error('❌ Supabase Storage upload failed:', uploadError);
+      throw new Error(`Storage upload failed: ${uploadError.message}`);
+    }
+
+    console.log('✅ PDF uploaded to storage:', uploadData.path);
+
+    // Save document metadata to database
+    // Only insert columns that are guaranteed to exist in the base schema
     const { data: dbData, error: dbError } = await supabase
       .from('parsed_documents')
       .insert({
@@ -253,16 +368,22 @@ app.post('/api/upload', upload.single('pdf'), async (req, res) => {
       .single();
 
     if (dbError) {
-      console.error('Supabase DB error:', dbError);
+      console.error('❌ Database insert failed:', dbError);
+      // Cleanup: delete uploaded file if DB insert fails
+      await supabase.storage.from('documents').remove([storagePath]);
       throw new Error(`Database insert failed: ${dbError.message}`);
     }
 
+    console.log('✅ Document record created:', dbData.id);
+
+    // Return the DB record plus computed fields the client needs
     res.json({
       ...dbData,
+      pdf_storage_path: storagePath,
       display_name: getDisplayName(storageFilename),
     });
   } catch (err) {
-    console.error('Upload error:', err);
+    console.error('❌ Upload error:', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -303,9 +424,19 @@ app.post('/api/extract-page', async (req, res) => {
       }
     }
 
-    // Stamp every field with the actual page number
-    const fields = (parsed.fields || []).map((f) => ({ ...f, page: pageNum }));
-    const checkboxes = (parsed.checkboxes || []).map((cb) => ({ ...cb, page: pageNum }));
+    // Filter out page number fields and stamp with actual page number
+    const PAGE_NUMBER_KEYWORDS = [
+      'page_current', 'page_total', 'page_number', 'page_count',
+      'page_of', 'page_num', 'current_page', 'total_page', 'page'
+    ];
+    
+    const fields = (parsed.fields || [])
+      .filter(f => !PAGE_NUMBER_KEYWORDS.some(kw => f.key.toLowerCase().includes(kw)))
+      .map((f) => ({ ...f, page: pageNum }));
+    
+    const checkboxes = (parsed.checkboxes || [])
+      .filter(cb => !PAGE_NUMBER_KEYWORDS.some(kw => cb.key.toLowerCase().includes(kw)))
+      .map((cb) => ({ ...cb, page: pageNum }));
 
     res.json({ fields, checkboxes });
   } catch (err) {
@@ -320,7 +451,7 @@ app.get('/api/documents', async (req, res) => {
     const { data, error } = await supabase
       .from('parsed_documents')
       .select('*')
-      .order('created_at', { ascending: false });
+      .order('id', { ascending: false });
 
     if (error) throw error;
 
@@ -371,6 +502,247 @@ app.get('/api/documents/:id', async (req, res) => {
     });
   } catch (err) {
     console.error('Fetch document error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/documents/:id/pdf — fetch PDF buffer from Supabase Storage
+app.get('/api/documents/:id/pdf', async (req, res) => {
+  try {
+    console.log(`📥 Fetching PDF for document ${req.params.id}`);
+    
+    // Get document metadata to find storage path
+    const { data: doc, error: docError } = await supabase
+      .from('parsed_documents')
+      .select('filename')
+      .eq('id', req.params.id)
+      .single();
+
+    if (docError) throw docError;
+    if (!doc.filename) {
+      return res.status(404).json({ error: 'PDF not found in storage' });
+    }
+
+    // Derive storage path from filename (format: pdfs/{timestamp}-{originalname}.pdf)
+    const storagePath = `pdfs/${doc.filename}`;
+    console.log(`📂 Downloading from storage: ${storagePath}`);
+
+    // Download PDF from Supabase Storage
+    const { data: pdfBlob, error: downloadError } = await supabase.storage
+      .from('documents')
+      .download(storagePath);
+
+    if (downloadError) {
+      console.error('❌ Storage download failed:', downloadError);
+      throw downloadError;
+    }
+
+    // Convert Blob to Buffer
+    const arrayBuffer = await pdfBlob.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+
+    console.log(`✅ PDF downloaded: ${buffer.length} bytes`);
+
+    // Send PDF as binary
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Length', buffer.length);
+    res.setHeader('Cache-Control', 'public, max-age=3600'); // Cache for 1 hour
+    res.send(buffer);
+  } catch (err) {
+    console.error('❌ Fetch PDF error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /api/documents/:id — delete a document
+app.delete('/api/documents/:id', async (req, res) => {
+  try {
+    const { error } = await supabase
+      .from('parsed_documents')
+      .delete()
+      .eq('id', req.params.id);
+
+    if (error) throw error;
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Delete document error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Gemini prompt for court classification ───────────────────────────────────
+const COURT_CLASSIFICATION_PROMPT = `You are a legal case classifier for Massachusetts courts.
+An incident occurred at a Massachusetts government building managed by DCAMM (Department of Capital Asset Management and Maintenance).
+Based on the incident details below, determine which Massachusetts court would most likely handle a resulting legal claim.
+
+INCIDENT DETAILS:
+{INCIDENT_SUMMARY}
+
+Return ONLY this JSON object — no markdown, no explanation outside the JSON:
+{
+  "court_department": "<one of the EXACT values listed below>",
+  "case_type": "<one of the EXACT values listed below>",
+  "court_location": "<one of the EXACT values listed below>",
+  "reasoning": "<1-2 sentence explanation of your classification>"
+}
+
+VALID court_department values (pick exactly one):
+"District Court", "Housing Court", "Land Court Department", "Probate and Family Court", "The Superior Court", "BMC"
+
+VALID case_type values (pick exactly one):
+"Small Claims", "Domestic Relations", "Civil", "Torts", "Housing Court Summary Process", "Housing Court Civil",
+"Housing Court Small Claims", "Housing Court Supplementary Process", "Administrative Civil Actions",
+"Actions Involving the State/Municipality", "Equitable Remedies", "DR Custody, Support, and Parenting Time",
+"Servicemembers", "Summary Process", "Paternity Managed", "Estates and Administration",
+"Special Immigration Juvenile Status", "Guardianship Managed", "Equity Complaint", "Real Property",
+"Contract / Business Cases", "Supplementary Process", "Tax Lien", "Miscellaneous", "Parentage", "Bail Petition"
+
+VALID court_location values (pick exactly one):
+"Fitchburg District Court", "Taunton District Court", "Wareham District Court",
+"Worcester County Probate and Family Court", "Somerville District Court", "Westfield District Court",
+"New Bedford District Court", "Norfolk County Probate and Family Court", "Barnstable County",
+"Hampden County Probate and Family Court", "Central Housing Court", "Metro South Housing Court",
+"Eastern Housing Court", "Southeast Housing Court", "Northeast Housing Court", "Western Housing Court",
+"Suffolk County Civil", "Boston Housing Court", "Worcester Housing Court", "Middlesex County",
+"Middlesex County Probate and Family Court", "BMC Central", "BMC East Boston", "Lawrence District Court",
+"Salem District Court", "Land Court Division", "Franklin County Probate and Family Court",
+"Plymouth Probate and Family Court", "Quincy District Court", "Gloucester District Court",
+"Essex County Probate and Family Court", "Springfield District Court", "Framingham District Court",
+"Leominster District Court", "Northampton District Court", "Bristol County Probate and Family Court",
+"Newburyport District Court", "Berkshire County Probate and Family Court", "BMC West Roxbury",
+"Hampshire County Probate and Family Court", "Dedham District Court", "Brookline District Court",
+"Nantucket County Probate and Family Court", "Brockton District Court", "Worcester District Court",
+"Barnstable County Probate and Family Court", "Falmouth District Court",
+"Suffolk County Probate and Family Court", "Plymouth District Court", "Essex County", "BMC Dorchester",
+"Pittsfield District Court", "Ipswich District Court", "BMC Charlestown", "Westborough District Court",
+"Waltham District Court", "Lowell District Court", "Newton District Court", "Milford District Court",
+"Cambridge District Court", "Edgartown District Court", "East Brookfield District Court",
+"BMC Brighton", "Malden District Court", "Boston Municipal Central Court", "Barnstable District Court",
+"Dudley District Court", "Clinton District Court", "BMC South Boston", "Marlborough District Court"
+
+Classification rules:
+- Injury / slip-and-fall / physical harm → case_type "Torts", court_department "District Court" or "The Superior Court"
+- Theft / vandalism / property damage → case_type "Civil" or "Small Claims" (Small Claims if likely under $7,000)
+- Assault / threat / security incident → case_type "Torts" or "Civil", court_department "District Court"
+- Fire / emergency → case_type "Civil" or "Actions Involving the State/Municipality"
+- court_location: use the incident location field to pick the nearest Massachusetts court; default to "Suffolk County Civil" if location is unclear or Boston-area
+`;
+
+// ── Helper: run Python prediction script ─────────────────────────────────────
+function runPythonPrediction(court_department, case_type, court_location) {
+  const scriptPath = path.join(__dirname, 'analysis', 'predict.py');
+
+  return new Promise((resolve, reject) => {
+    // Try 'python' first; fall back to 'python3' if it fails
+    const trySpawn = (cmd) => {
+      const py = spawn(cmd, [scriptPath]);
+      let out = '', err = '';
+
+      py.stdout.on('data', (d) => { out += d.toString(); });
+      py.stderr.on('data', (d) => { err += d.toString(); });
+
+      py.on('error', (spawnErr) => {
+        if (cmd === 'python') {
+          console.warn('⚠️  "python" not found, retrying with "python3"...');
+          trySpawn('python3').then(resolve).catch(reject);
+        } else {
+          reject(new Error(`Could not spawn Python: ${spawnErr.message}`));
+        }
+      });
+
+      py.on('close', (code) => {
+        if (code !== 0) {
+          return reject(new Error(err.trim() || `Python exited with code ${code}`));
+        }
+        try {
+          resolve(JSON.parse(out.trim()));
+        } catch {
+          reject(new Error(`Bad JSON from predict.py: ${out.slice(0, 200)}`));
+        }
+      });
+
+      py.stdin.write(JSON.stringify({ court_department, case_type, court_location }));
+      py.stdin.end();
+    };
+
+    trySpawn('python');
+  });
+}
+
+// POST /api/analyze — classify incident with Gemini, predict case duration with ML model
+app.post('/api/analyze', async (req, res) => {
+  try {
+    const { fields = [], checkboxes = [] } = req.body;
+
+    // Build a compact incident summary for the Gemini prompt (non-empty values only)
+    const summaryLines = [];
+    for (const f of fields) {
+      if (f.value && String(f.value).trim()) {
+        summaryLines.push(`${f.label}: ${f.value}`);
+      }
+    }
+    for (const cb of checkboxes) {
+      if (cb.value === 'Yes' || cb.value === true) {
+        summaryLines.push(`${cb.label}: Yes`);
+      }
+    }
+
+    const incidentSummary = summaryLines.length > 0
+      ? summaryLines.join('\n')
+      : 'No incident details provided (blank form).';
+
+    const prompt = COURT_CLASSIFICATION_PROMPT.replace('{INCIDENT_SUMMARY}', incidentSummary);
+
+    console.log('🔍 Running Gemini court classification...');
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+    const result = await model.generateContent([{ text: prompt }]);
+    let geminiText = result.response.text().trim()
+      .replace(/```json\s*/gi, '')
+      .replace(/```\s*/g, '')
+      .trim();
+
+    let classification;
+    try {
+      classification = JSON.parse(geminiText);
+    } catch {
+      const match = geminiText.match(/\{[\s\S]*\}/);
+      if (match) {
+        classification = JSON.parse(match[0]);
+      } else {
+        throw new Error('Gemini did not return valid JSON: ' + geminiText.slice(0, 300));
+      }
+    }
+
+    console.log('✅ Gemini classification:', {
+      court_department: classification.court_department,
+      case_type: classification.case_type,
+      court_location: classification.court_location,
+    });
+
+    // Run the Random Forest model
+    let predicted_days = null;
+    try {
+      const pyResult = await runPythonPrediction(
+        classification.court_department,
+        classification.case_type,
+        classification.court_location
+      );
+      predicted_days = pyResult.predicted_days;
+      console.log(`✅ Python prediction: ${predicted_days} days`);
+    } catch (pyErr) {
+      console.error('⚠️  Python prediction failed (returning null):', pyErr.message);
+    }
+
+    res.json({
+      court_department: classification.court_department,
+      case_type: classification.case_type,
+      court_location: classification.court_location,
+      reasoning: classification.reasoning || '',
+      predicted_days,
+    });
+  } catch (err) {
+    console.error('❌ Analyze error:', err);
     res.status(500).json({ error: err.message });
   }
 });
